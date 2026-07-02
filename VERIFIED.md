@@ -17,3 +17,15 @@ app untouched — confirming it is NOT dependent on app-priming.
 
 **Why it works:** the device only honors a command sent after the full 9-message
 arming sequence in the same connection (see README). Isolated commands are ignored.
+
+## REST API + Web UI — live end-to-end (2026-07-01)
+Server runs on the ThinkPad as a systemd service (bhyve.service). Verified
+through the full stack (web UI -> REST -> BLE -> device):
+```
+GET  /api/status           -> {"clock":"...","is_watering":false}
+POST /api/zones/1/start {minutes:2}
+     -> {"confirmed_watering":true,"run_state":4,"seconds_remaining":120}
+POST /api/stop
+     -> {"confirmed_idle":true,"run_state":1}
+```
+Web UI opened at http://<host>:8000/ — 4 valves with ON buttons + Stop all + live status.
