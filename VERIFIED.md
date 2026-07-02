@@ -34,3 +34,13 @@ Web UI opened at http://<host>:8000/ — 4 valves with ON buttons + Stop all + l
 Added msg_stop_zone(station) = manual watering at 0s. Offline: 20/20 byte checks pass.
 Live via API: start zone 1 -> watering 180s; POST /api/zones/1/stop -> confirmed idle.
 Web UI now has per-valve Turn ON / Turn OFF plus a global Stop ALL.
+
+## macOS — VERIFIED (2026-07-01)
+The clean library + full server run on macOS (CoreBluetooth via bleak), identical
+to Linux. Earlier macOS failures were the MISSING ARMING SEQUENCE, not a platform
+bug — proven by the same failure on Linux and the fix working on both.
+```
+cli.py selftest (on Mac): [1] set 03:33 PASS  [2] start zone1 watering PASS  [3] stop idle PASS
+Mac server GET /api/status -> {"clock":"01:57:28 UTC","is_watering":false}
+```
+macOS uses a per-peripheral UUID as the address (not the MAC).

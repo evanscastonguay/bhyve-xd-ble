@@ -59,8 +59,9 @@ cp config.example.json config.json      # then edit in your address + network ke
 
 - **Linux (BlueZ):** `address` is the MAC, e.g. `44:67:55:D8:7A:B9`. Recommended
   platform — this is where it was verified.
-- **macOS (CoreBluetooth):** `address` is an opaque per-Mac UUID; run
-  `python cli.py scan` to find it. (macOS is not yet verified end-to-end.)
+- **macOS (CoreBluetooth):** `address` is an opaque per-Mac UUID (stable per
+  peripheral per Mac); find it once by connecting. **Verified working end-to-end**
+  on macOS — identical behavior to Linux (the arming sequence is platform-neutral).
 - The timer is battery BLE — it only advertises briefly, so **press a button on
   the timer** to wake it right before running a command.
 
