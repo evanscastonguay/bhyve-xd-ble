@@ -182,6 +182,16 @@ class DeviceStatus:
             return "?"
         return datetime.fromtimestamp(self.device_time, timezone.utc).strftime("%H:%M:%S UTC")
 
+    def to_dict(self) -> dict:
+        """JSON-serializable view (used by the REST API and anywhere else)."""
+        return {
+            "clock": self.clock_str,
+            "device_time": self.device_time,
+            "is_watering": self.is_watering,
+            "run_state": self.run_state,
+            "seconds_remaining": self.seconds_remaining,
+        }
+
 
 def parse_reply(pt: bytes) -> DeviceStatus | None:
     """Parse a decrypted device reply (deviceStatusInfo) into a DeviceStatus."""
@@ -216,25 +226,78 @@ def _keystream_block(key: bytes, iv: bytes, ctr: int) -> bytes:
 # Device controller
 # --------------------------------------------------------------------------- #
 class BHyveXD:
-    """One connection's worth of control over a B-Hyve XD timer.
+    """A B-Hyve XD timer. Two API levels:
 
-    Usage:
-        dev = BHyveXD(address, network_key_hex, tz_offset_sec=-14400)
+    High-level (one call = one connection; used by the CLI + REST server):
+        dev = BHyveXD.from_config("config.json")
+        st = await dev.start(1, 300)     # arm + start zone 1 + read-back
+        st = await dev.stop(1)           # arm + stop zone 1 + read-back
+        st = await dev.stop()            # arm + stop ALL + read-back
+        st = await dev.status()          # arm + read-back
+        st = await dev.sync_clock()      # arm (sets clock to now) + read-back
+        print(st.is_watering, st.seconds_remaining)
+
+    Low-level (manual control within one connection):
         async with dev.session() as s:
-            await s.arm()                      # REQUIRED before any command
-            await s.set_clock_now()
+            await s.arm()                # REQUIRED before any command
             await s.start_zone(1, 300)
-            status = await s.read_status()     # confirm: status.is_watering
-            await s.stop()
+            st = await s.read_status()
     """
 
-    def __init__(self, address: str, network_key_hex: str, *, tz_offset_sec: int = -14400):
+    def __init__(self, address: str, network_key_hex: str, *, tz_offset_sec: int = -14400,
+                 name: str = "B-Hyve XD", stations: int = 4):
         self.address = address
         self.key = bytes.fromhex(network_key_hex)
         self.tz_offset_sec = tz_offset_sec
+        self.name = name
+        self.stations = stations
+
+    @classmethod
+    def from_config(cls, path: str = "config.json") -> "BHyveXD":
+        """Build a device from a config.json (see config.example.json). The one
+        place config is loaded — shared by the CLI and the REST server."""
+        import json
+        with open(path) as f:
+            d = json.load(f)["devices"][0]
+        return cls(d["address"], d["network_key"],
+                   tz_offset_sec=int(d.get("tz_offset_sec", -14400)),
+                   name=d.get("name", "B-Hyve XD"),
+                   stations=int(d.get("stations", 4)))
 
     def session(self, *, scan_timeout: float = 30.0):
+        """Low-level: open a BLE session for manual arm()/command/read control."""
         return _Session(self, scan_timeout)
+
+    # -- High-level one-shot operations ----------------------------------- #
+    # Each opens its own connection, ARMS the device (required), performs the
+    # action, and returns the confirmed DeviceStatus. This is THE shared control
+    # logic used by both the CLI and the REST server — no duplication.
+
+    async def status(self) -> DeviceStatus:
+        async with self.session() as s:
+            await s.arm()
+            return await s.read_status()
+
+    async def sync_clock(self) -> DeviceStatus:
+        async with self.session() as s:
+            await s.arm()          # arm() already sets the clock to now
+            return await s.read_status()
+
+    async def start(self, station: int, duration_sec: int) -> DeviceStatus:
+        async with self.session() as s:
+            await s.arm()
+            await s.start_zone(station, duration_sec)
+            return await s.read_status()
+
+    async def stop(self, station: int | None = None) -> DeviceStatus:
+        """Stop one zone (station given) or ALL zones (station=None)."""
+        async with self.session() as s:
+            await s.arm()
+            if station is None:
+                await s.stop()
+            else:
+                await s.stop_zone(station)
+            return await s.read_status()
 
 
 class _Session:
@@ -307,14 +370,12 @@ class _Session:
             await self._send(m)
 
     async def set_clock(self, dt: datetime):
-        """Set the device clock to a specific local datetime."""
+        """Set the device clock to a specific local datetime (used by selftest;
+        normal clock sync happens inside arm())."""
         z = dt.strftime("%z") or "+0000"
         iso = dt.strftime("%Y-%m-%dT%H:%M:%S") + z[:3] + ":" + z[3:]
         await self._send(msg_time_string(iso))
         await self._send(msg_set_time(int(dt.timestamp()), self._dev.tz_offset_sec))
-
-    async def set_clock_now(self):
-        await self.set_clock(datetime.now(timezone(timedelta(seconds=self._dev.tz_offset_sec))))
 
     async def start_zone(self, station: int, duration_sec: int):
         await self._send(msg_start(station, duration_sec))
