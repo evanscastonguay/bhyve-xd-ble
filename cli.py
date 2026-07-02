@@ -109,7 +109,7 @@ async def cmd_scan():
 # --- onboarding commands ----------------------------------------------------- #
 async def cmd_login(dry_run):
     email = input("Orbit email: ").strip()
-    password = getpass.getpass("Orbit password (hidden): ").strip()
+    password = getpass.getpass("Orbit password (hidden): ")   # do NOT strip — may be significant
     print("\nlogging in and fetching devices...")
     devices = await onboarding.cloud_fetch(email, password)
     if not devices:
@@ -121,36 +121,48 @@ async def cmd_login(dry_run):
     if dry_run:
         print("\n--dry-run: no config written."); return
     plat = onboarding.current_platform()
-    resolved = []
+    resolved, failed = [], []
     for d in devices:
         if not d["network_key"] or not d["mac"]:
-            print(f"  skip {d['name']} (missing key/mac)"); continue
+            print(f"  skip {d['name']} (missing key/mac)"); failed.append(d["name"]); continue
         print(f"\nresolving BLE address for {d['name']} ({plat})...", flush=True)
         if plat == "macos":
             print("  >> WAKE this timer (press/hold its button) now...")
-        addr = await onboarding.resolve_address(d["mac"], d["network_key"])
-        print(f"  address = {addr}")
-        resolved.append({**d, "address": addr})
+        try:
+            addr = await onboarding.resolve_address(d["mac"], d["network_key"])
+            print(f"  address = {addr}")
+            resolved.append({**d, "address": addr})
+        except Exception as e:   # keep going; one bad timer must not lose the others
+            print(f"  could not resolve {d['name']}: {e}"); failed.append(d["name"])
+    if not resolved:
+        print("\nno devices resolved — nothing written. Wake the timer(s) and re-run `login`."); return
     onboarding.write_config(resolved, "config.json")
-    print(f"\nwrote config.json with {len(resolved)} device(s). Try: python cli.py status")
+    msg = f"\nwrote config.json with {len(resolved)} device(s)."
+    if failed:
+        msg += f" Unresolved: {failed} — re-run `login` or `find` for those."
+    print(msg + " Try: ./bhyve status")
 
 
 async def cmd_find(name):
     """Re-resolve the BLE address for one configured device (macOS UUID drift)."""
-    cfg = json.load(open("config.json"))
+    try:
+        with open("config.json") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        print("no config.json — run `login` first."); return
     devs = cfg["devices"]
-    target = next((d for d in devs if d.get("name") == name), None) if name else devs[0]
+    target = next((d for d in devs if d.get("name") == name), None) if name else (devs[0] if devs else None)
     if target is None:
-        print(f"no device named {name!r} in config"); return
-    if not target.get("mac"):
-        print("this device has no stored MAC to match against — re-run `login`"); return
-    plat = onboarding.current_platform()
-    if plat == "macos":
+        print(f"no device named {name!r} in config" if name else "config has no devices"); return
+    if not target.get("mac") or not target.get("network_key"):
+        print("this device has no stored MAC/key to match against — re-run `login`"); return
+    if onboarding.current_platform() == "macos":
         print(">> WAKE the timer (press/hold its button) now...")
     addr = await onboarding.resolve_address(target["mac"], target["network_key"])
     old = target.get("address")
     target["address"] = addr
-    json.dump(cfg, open("config.json", "w"), indent=2)
+    with open("config.json", "w") as f:
+        json.dump(cfg, f, indent=2)
     print(f"{target['name']}: address {old} -> {addr}")
 
 

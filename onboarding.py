@@ -106,8 +106,10 @@ def current_platform() -> str:
 
 def write_config(devices: list[dict], path: str = "config.json") -> None:
     """Write a config.json from resolved device dicts. Omits tz_offset_sec so it
-    derives from the host at load time. Never writes the password."""
+    derives from the host at load time. Never writes the password. Writes to a
+    temp file and atomically renames so a crash can't corrupt an existing config."""
     import json
+    import os
     out = {"devices": [
         {"name": d.get("name", "B-Hyve XD"),
          "address": d["address"],
@@ -115,8 +117,10 @@ def write_config(devices: list[dict], path: str = "config.json") -> None:
          "stations": int(d.get("stations", 4)),
          "mac": d.get("mac")}
         for d in devices]}
-    with open(path, "w") as f:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
         json.dump(out, f, indent=2)
+    os.replace(tmp, path)
 
 
 # --- live: cloud fetch ------------------------------------------------------- #
@@ -171,33 +175,45 @@ async def _get_mesh(s, headers, mesh_id) -> dict:
 
 # --- live: address resolution ("pairing") ------------------------------------ #
 async def resolve_address(mac: str, network_key: str, *, platform_name: str | None = None,
-                          scan_timeout: float = 6.0, top_n: int = 4) -> str:
+                          scan_timeout: float = 12.0, max_probe: int = 12) -> str:
     """Resolve the local BLE address for `mac`:
       Linux/BlueZ -> the MAC itself.
-      macOS       -> scan, probe the strongest candidates, arm each and read its
-                     MAC, and return the opaque UUID whose device MAC matches.
-    Wake the timer (press its button) before calling on macOS."""
+      macOS       -> scan, probe candidates (strongest first), read each one's own
+                     MAC over BLE, and return the opaque UUID whose MAC matches.
+    Non-B-Hyve devices are fast-rejected (no fe32 service) without being armed.
+    Wake the timer (press/hold its button) before calling on macOS."""
     p = platform_name or current_platform()
     if p == "linux":
         return mac
-    return await _resolve_macos(mac, network_key, scan_timeout=scan_timeout, top_n=top_n)
+    return await _resolve_macos(mac, network_key, scan_timeout=scan_timeout, max_probe=max_probe)
 
 
-async def _resolve_macos(mac: str, network_key: str, *, scan_timeout: float, top_n: int) -> str:
+async def _resolve_macos(mac: str, network_key: str, *, scan_timeout: float, max_probe: int) -> str:
     from bleak import BleakScanner
-    from bhyve_xd import BHyveXD
+    from bhyve_xd import BHyveXD, NotABHyveError
 
     devs = await BleakScanner.discover(timeout=scan_timeout, return_adv=True)
+    # macOS hides the fe32 service in advertisements, so we can't pre-filter by
+    # service UUID; instead probe strongest-first and let the session fast-reject
+    # non-B-Hyve devices (NotABHyveError) before arming. Probe up to max_probe.
     candidates = sorted(((adv.rssi if adv.rssi is not None else -999, addr)
-                         for addr, (d, adv) in devs.items()), reverse=True)[:top_n]
+                         for addr, (d, adv) in devs.items()), reverse=True)[:max_probe]
+    tried = 0
     for _rssi, addr in candidates:
         try:
             dev = BHyveXD(addr, network_key)     # candidate UUID + the account key
-            async with dev.session(scan_timeout=6.0) as sess:
-                await sess.arm()                 # non-B-Hyve devices fail fast here
+            # fast probe: 1 connect attempt + short find so a wrong/asleep device
+            # fails quickly instead of retrying.
+            async with dev.session(scan_timeout=4.0, connect_attempts=1) as sess:
+                await sess.arm()
                 st = await sess.read_status()
+            tried += 1
             if st.device_mac and st.device_mac.upper() == mac.upper():
                 return addr
+        except NotABHyveError:
+            continue  # not a B-Hyve; never armed
         except Exception:
-            continue  # not this one (not a B-Hyve, or wrong device, or asleep)
-    raise OnboardError(f"could not find timer {mac} nearby — wake it (press its button) and retry")
+            continue  # asleep / connect failed / wrong device
+    raise OnboardError(
+        f"could not find timer {mac} nearby (checked {len(candidates)} candidate(s), "
+        f"{tried} B-Hyve) — wake it (press/hold its button), keep it close to the Mac, and retry")

@@ -169,6 +169,10 @@ SETUP_FIELD20 = bytes.fromhex("aa775a0f0700a201020800353e")
 SETUP_FIELD120 = bytes.fromhex("aa775a0f0700c207020a001266")
 
 
+class NotABHyveError(Exception):
+    """Connected device is not a B-Hyve timer (no fe32 GATT service)."""
+
+
 def host_tz_offset() -> int:
     """The host's current UTC offset in seconds (e.g. -14400 for EDT). Used to
     set the device clock to local time without a hardcoded offset."""
@@ -273,6 +277,8 @@ class BHyveXD:
         import json
         with open(path) as f:
             devices = json.load(f)["devices"]
+        if isinstance(device, bool):
+            device = None   # bool is not a valid selector; use the default
         if device is None:
             d = devices[0]
         elif isinstance(device, int):
@@ -288,9 +294,10 @@ class BHyveXD:
                    name=d.get("name", "B-Hyve XD"),
                    stations=int(d.get("stations", 4)))
 
-    def session(self, *, scan_timeout: float = 30.0):
-        """Low-level: open a BLE session for manual arm()/command/read control."""
-        return _Session(self, scan_timeout)
+    def session(self, *, scan_timeout: float = 30.0, connect_attempts: int = 3):
+        """Low-level: open a BLE session for manual arm()/command/read control.
+        connect_attempts=1 makes onboarding probes fail fast on the wrong device."""
+        return _Session(self, scan_timeout, connect_attempts)
 
     # -- High-level one-shot operations ----------------------------------- #
     # Each opens its own connection, ARMS the device (required), performs the
@@ -325,9 +332,10 @@ class BHyveXD:
 
 
 class _Session:
-    def __init__(self, dev: BHyveXD, scan_timeout: float):
+    def __init__(self, dev: BHyveXD, scan_timeout: float, connect_attempts: int = 3):
         self._dev = dev
         self._scan_timeout = scan_timeout
+        self._connect_attempts = connect_attempts
         self._client: BleakClient | None = None
         self._iv: bytes | None = None
         self._tx = 0
@@ -341,7 +349,13 @@ class _Session:
         ble = await BleakScanner.find_device_by_address(d.address, timeout=self._scan_timeout)
         if ble is None:
             raise RuntimeError(f"{d.address} not found — is the timer awake (press its button)?")
-        self._client = await establish_connection(BleakClient, ble, d.address, max_attempts=3)
+        self._client = await establish_connection(BleakClient, ble, d.address,
+                                                  max_attempts=self._connect_attempts)
+        # Fast-reject: only B-Hyve devices expose the fe32 service. This keeps the
+        # onboarding scan from arming unrelated BLE devices.
+        if not any("fe32" in s.uuid.lower() for s in self._client.services):
+            await self._client.disconnect()
+            raise NotABHyveError(f"{d.address} is not a B-Hyve device (no fe32 service)")
         await self._client.start_notify(READ_CHAR, lambda _s, data: self._notifs.append(bytes(data)))
         await asyncio.sleep(0.5)
         # AES handshake

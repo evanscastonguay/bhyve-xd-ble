@@ -67,7 +67,11 @@ async def index():
 async def devices():
     """List configured timers (name + index) for a multi-device UI selector."""
     import json
-    cfg = json.load(open(CONFIG))["devices"]
+    try:
+        with open(CONFIG) as f:
+            cfg = json.load(f)["devices"]
+    except FileNotFoundError as err:
+        raise HTTPException(404, "no config.json — run `cli.py login` first") from err
     return [{"index": i, "name": d.get("name", "B-Hyve XD"), "stations": int(d.get("stations", 4))}
             for i, d in enumerate(cfg)]
 

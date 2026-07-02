@@ -66,6 +66,53 @@ def main():
     # platform detection
     r.append(check("current_platform in {macos,linux}", O.current_platform() in ("macos", "linux"), True))
 
+    # error_for_status(400) -> AuthError (was untested)
+    r.append(check("400 -> AuthError", O.error_for_status(400) is O.AuthError, True))
+
+    # resolve_address Linux branch returns the MAC untouched (no BLE).
+    import asyncio
+    linux_addr = asyncio.run(
+        O.resolve_address("44:67:55:D8:7A:B9", "00" * 16, platform_name="linux"))
+    r.append(check("resolve_address(linux) -> MAC", linux_addr, "44:67:55:D8:7A:B9"))
+
+    # cloud_fetch success path, mocked (no network): login -> devices -> mesh -> parse.
+    import sys as _sys, types as _types
+
+    class _Resp:
+        def __init__(self, status, data): self.status, self._d = status, data
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def json(self): return self._d
+
+    class _Session:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        def post(self, url, **k): return _Resp(200, {"orbit_api_key": "TOK", "user_id": "u1"})
+        def get(self, url, **k):
+            if url.endswith("/devices"):
+                return _Resp(200, [{"id": "d1", "name": "Yard", "type": "sprinkler_timer",
+                                    "mac_address": "446755d87ab9", "num_stations": 4,
+                                    "hardware_version": "HT34A", "firmware_version": "0107",
+                                    "mesh_id": "m1"}])
+            return _Resp(200, {"ble_network_key": "ABEiM0RVZneImaq7zN3u/w=="})  # mesh
+
+    fake_aiohttp = _types.ModuleType("aiohttp")
+    fake_aiohttp.ClientSession = _Session
+    fake_aiohttp.ClientTimeout = lambda **k: None
+    _saved = _sys.modules.get("aiohttp")
+    _sys.modules["aiohttp"] = fake_aiohttp
+    try:
+        devs = asyncio.run(O.cloud_fetch("e@x.com", "pw"))
+    finally:
+        if _saved is not None: _sys.modules["aiohttp"] = _saved
+        else: _sys.modules.pop("aiohttp", None)
+    r.append(check("cloud_fetch mocked -> 1 device", len(devs), 1))
+    r.append(check("cloud_fetch device name", devs[0]["name"], "Yard"))
+    r.append(check("cloud_fetch device key (hex)", devs[0]["network_key"],
+                   "00112233445566778899aabbccddeeff"))
+    r.append(check("cloud_fetch device mac", devs[0]["mac"], "44:67:55:D8:7A:B9"))
+
     n = sum(r)
     print(f"\n{n}/{len(r)} onboarding checks passed" + ("  ✅" if n == len(r) else "  ❌"))
     return 0 if n == len(r) else 1

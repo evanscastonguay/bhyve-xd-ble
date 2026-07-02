@@ -168,6 +168,21 @@ def main():
     results.append(check("BHyveXD explicit tz respected",
                          B.BHyveXD("addr", "00" * 16, tz_offset_sec=-25200).tz_offset_sec, -25200))
 
+    # from_config error paths + bool-not-index (server relies on these exceptions).
+    def _raises(fn, exc):
+        try:
+            fn(); return False
+        except exc:
+            return True
+        except Exception:
+            return False
+    results.append(check("from_config bad name -> KeyError",
+                         _raises(lambda: B.BHyveXD.from_config(p2, device="Nope"), KeyError), True))
+    results.append(check("from_config bad index -> IndexError",
+                         _raises(lambda: B.BHyveXD.from_config(p2, device=9), IndexError), True))
+    results.append(check("from_config device=True is NOT index 1 (first device)",
+                         B.BHyveXD.from_config(p2, device=True).address, "A1"))
+
     n = sum(results)
     print(f"\n{n}/{len(results)} checks passed"
           + ("  ✅ library + refactored API verified" if n == len(results) else "  ❌ MISMATCH"))
