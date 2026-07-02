@@ -159,6 +159,15 @@ def main():
     results.append(check("from_config keeps explicit tz when present",
                          B.BHyveXD.from_config(p2, device="Back").tz_offset_sec, -18000))
 
+    # BHyveXD constructor default tz derives from host (NOT a hardcoded int).
+    import inspect as _insp
+    _default = _insp.signature(B.BHyveXD.__init__).parameters["tz_offset_sec"].default
+    results.append(check("BHyveXD tz default is host-derived (signature default is None)", _default, None))
+    results.append(check("BHyveXD() resolves tz to host offset",
+                         B.BHyveXD("addr", "00" * 16).tz_offset_sec, host_off))
+    results.append(check("BHyveXD explicit tz respected",
+                         B.BHyveXD("addr", "00" * 16, tz_offset_sec=-25200).tz_offset_sec, -25200))
+
     n = sum(results)
     print(f"\n{n}/{len(results)} checks passed"
           + ("  ✅ library + refactored API verified" if n == len(results) else "  ❌ MISMATCH"))

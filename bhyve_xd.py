@@ -253,11 +253,13 @@ class BHyveXD:
             st = await s.read_status()
     """
 
-    def __init__(self, address: str, network_key_hex: str, *, tz_offset_sec: int = -14400,
+    def __init__(self, address: str, network_key_hex: str, *, tz_offset_sec: int | None = None,
                  name: str = "B-Hyve XD", stations: int = 4):
         self.address = address
         self.key = bytes.fromhex(network_key_hex)
-        self.tz_offset_sec = tz_offset_sec
+        # Default to the host's UTC offset so the device clock is set to local time
+        # without any hardcoded timezone.
+        self.tz_offset_sec = host_tz_offset() if tz_offset_sec is None else tz_offset_sec
         self.name = name
         self.stations = stations
 

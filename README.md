@@ -54,16 +54,31 @@ password). See `config.example.json`.
 ```bash
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
-cp config.example.json config.json      # then edit in your address + network key
 ```
 
-- **Linux (BlueZ):** `address` is the MAC, e.g. `44:67:55:D8:7A:B9`. Recommended
-  platform — this is where it was verified.
-- **macOS (CoreBluetooth):** `address` is an opaque per-Mac UUID (stable per
-  peripheral per Mac); find it once by connecting. **Verified working end-to-end**
-  on macOS — identical behavior to Linux (the arming sequence is platform-neutral).
-- The timer is battery BLE — it only advertises briefly, so **press a button on
-  the timer** to wake it right before running a command.
+## Onboarding (once) — just your Orbit account
+
+No hand-editing of keys or addresses. Give your Orbit **email + password** and it
+sets everything up:
+
+```bash
+python cli.py login            # email+password -> writes config.json
+python cli.py login --dry-run  # just list your account's timers, write nothing
+```
+
+`login` logs in to the Orbit cloud, fetches each timer's **network key**, resolves
+the correct BLE address for your platform, derives the timezone from the host, and
+writes `config.json`. **The password is used once and never stored** — only the
+network key + resolved address are saved (git-ignored). After onboarding, all
+control is 100% local BLE (no cloud).
+
+- **Address resolution / pairing:** Linux uses the MAC directly. On macOS the
+  address is an opaque per-Mac UUID, so `login` scans, connects to the timer,
+  reads its MAC over BLE, and matches it to the cloud MAC. **Wake the timer
+  (press/hold its button)** during this step.
+- If a macOS UUID ever drifts (e.g. after an OS update), re-resolve without
+  re-login: `python cli.py find [name]`.
+- The timer is battery BLE — press a button to wake it before any command.
 
 ## Usage
 
@@ -72,15 +87,19 @@ python cli.py status            # read clock / watering state / battery
 python cli.py settime           # sync the clock to now
 python cli.py start 1 300       # start zone 1 for 300s (confirms watering)
 python cli.py stop              # stop all zones (confirms idle)
-python cli.py selftest          # autonomous: set clock -> read -> start -> read -> stop -> read
-python cli.py scan              # list BLE devices (find the address)
+python cli.py stop 1            # stop zone 1 only
+python cli.py selftest          # autonomous: set -> read -> start -> read -> stop -> read
+python cli.py scan              # list BLE devices
+
+# Several timers on the account? target one by name or index:
+python cli.py --device Back start 1 300
 ```
 
 Library use:
 
 ```python
 from bhyve_xd import BHyveXD
-dev = BHyveXD("44:67:55:D8:7A:B9", "<network_key_hex>", tz_offset_sec=-14400)
+dev = BHyveXD.from_config("config.json")   # or BHyveXD(address, key)  # tz -> host
 async with dev.session() as s:
     await s.arm()                    # REQUIRED first
     await s.start_zone(1, 300)
@@ -96,24 +115,29 @@ server are thin wrappers that call the same high-level methods — no duplicated
 control logic:
 
 ```
-              bhyve_xd.py  (cipher · protocol · BHyveXD.status/start/stop/sync_clock · read-back)
-                 ▲                     ▲
-        cli.py ──┘                     └── server.py ──▶ index.html (web UI calls the REST API)
+   onboarding.py (cloud login · address resolution/pairing · write config)
+        │
+        ▼
+   bhyve_xd.py  (cipher · protocol · BHyveXD.status/start/stop/sync_clock · read-back)
+        ▲                     ▲
+ cli.py ┘                     └─ server.py ──▶ index.html (web UI calls the REST API)
 ```
 
 `BHyveXD.from_config()` is the single config loader; `DeviceStatus.to_dict()` is
-the single serializer. Change the protocol once, in one place.
+the single serializer; `onboarding.py` is the single onboarding path (CLI today,
+a web flow could reuse it). Change the protocol once, in one place.
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `bhyve_xd.py` | **the library** — cipher, protocol, `BHyveXD` controller + read-back (all logic) |
-| `cli.py` | thin CLI over `bhyve_xd` |
+| `onboarding.py` | cloud login (email/password → keys), address resolution/pairing, config write |
+| `cli.py` | thin CLI over `bhyve_xd` + `onboarding` (`login`, `find`, control) |
 | `server.py` | thin FastAPI REST API over `bhyve_xd` |
 | `index.html` | web UI (calls the REST API) |
-| `selftest_offline.py` | offline byte checks (no device) — validates message builders |
-| `config.example.json` | copy to `config.json`, fill in address + network key |
+| `selftest_offline.py` · `test_onboarding.py` · `test_cli.py` | offline test suites (no device) |
+| `config.example.json` | shape reference — `cli.py login` generates the real `config.json` |
 
 ## Credits
 
