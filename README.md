@@ -89,12 +89,29 @@ async with dev.session() as s:
     await s.stop()
 ```
 
+## Architecture (one source of truth)
+
+All Bluetooth/protocol logic lives in **`bhyve_xd.py`**. The CLI and the REST
+server are thin wrappers that call the same high-level methods — no duplicated
+control logic:
+
+```
+              bhyve_xd.py  (cipher · protocol · BHyveXD.status/start/stop/sync_clock · read-back)
+                 ▲                     ▲
+        cli.py ──┘                     └── server.py ──▶ index.html (web UI calls the REST API)
+```
+
+`BHyveXD.from_config()` is the single config loader; `DeviceStatus.to_dict()` is
+the single serializer. Change the protocol once, in one place.
+
 ## Files
 
 | File | Purpose |
 |---|---|
-| `bhyve_xd.py` | the whole library: cipher, protocol, `BHyveXD` controller + read-back |
-| `cli.py` | command-line interface |
+| `bhyve_xd.py` | **the library** — cipher, protocol, `BHyveXD` controller + read-back (all logic) |
+| `cli.py` | thin CLI over `bhyve_xd` |
+| `server.py` | thin FastAPI REST API over `bhyve_xd` |
+| `index.html` | web UI (calls the REST API) |
 | `selftest_offline.py` | offline byte checks (no device) — validates message builders |
 | `config.example.json` | copy to `config.json`, fill in address + network key |
 
