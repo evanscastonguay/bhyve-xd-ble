@@ -169,12 +169,19 @@ SETUP_FIELD20 = bytes.fromhex("aa775a0f0700a201020800353e")
 SETUP_FIELD120 = bytes.fromhex("aa775a0f0700c207020a001266")
 
 
+def host_tz_offset() -> int:
+    """The host's current UTC offset in seconds (e.g. -14400 for EDT). Used to
+    set the device clock to local time without a hardcoded offset."""
+    return int(datetime.now().astimezone().utcoffset().total_seconds())
+
+
 @dataclass
 class DeviceStatus:
     device_time: int | None = None     # epoch seconds (device clock)
     run_state: int | None = None       # 1 = idle, 4 = watering
     seconds_remaining: int | None = None
     is_watering: bool = False
+    device_mac: str | None = None      # "AA:BB:CC:DD:EE:FF" (reply field 1)
 
     @property
     def clock_str(self) -> str:
@@ -199,7 +206,9 @@ def parse_reply(pt: bytes) -> DeviceStatus | None:
         return None
     st = DeviceStatus()
     for fn, wt, v in iter_fields(pt[6:-2]):
-        if fn == 7 and wt == 0 and 1_700_000_000 < v < 2_000_000_000:
+        if fn == 1 and wt == 2 and isinstance(v, (bytes, bytearray)) and len(v) == 6:
+            st.device_mac = ":".join(f"{b:02X}" for b in v)   # device's own MAC
+        elif fn == 7 and wt == 0 and 1_700_000_000 < v < 2_000_000_000:
             st.device_time = v
         elif fn == 16 and wt == 2:  # deviceStatusInfo
             for sfn, swt, sv in iter_fields(v):
@@ -253,14 +262,27 @@ class BHyveXD:
         self.stations = stations
 
     @classmethod
-    def from_config(cls, path: str = "config.json") -> "BHyveXD":
+    def from_config(cls, path: str = "config.json", device: "int | str | None" = None) -> "BHyveXD":
         """Build a device from a config.json (see config.example.json). The one
-        place config is loaded — shared by the CLI and the REST server."""
+        place config is loaded — shared by the CLI and the REST server.
+
+        device selects which timer: None -> first, an int -> index, a str -> name.
+        tz_offset_sec defaults to the host's offset when not set in config."""
         import json
         with open(path) as f:
-            d = json.load(f)["devices"][0]
+            devices = json.load(f)["devices"]
+        if device is None:
+            d = devices[0]
+        elif isinstance(device, int):
+            d = devices[device]
+        else:
+            matches = [x for x in devices if x.get("name") == device]
+            if not matches:
+                raise KeyError(f"no device named {device!r} in {path} "
+                               f"(have: {[x.get('name') for x in devices]})")
+            d = matches[0]
         return cls(d["address"], d["network_key"],
-                   tz_offset_sec=int(d.get("tz_offset_sec", -14400)),
+                   tz_offset_sec=int(d["tz_offset_sec"]) if "tz_offset_sec" in d else host_tz_offset(),
                    name=d.get("name", "B-Hyve XD"),
                    stations=int(d.get("stations", 4)))
 
