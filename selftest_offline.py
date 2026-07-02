@@ -99,9 +99,42 @@ def main():
     results.append(check("msg_stop_zone(1) != global msg_stop()",
                          B.msg_stop_zone(1) != B.msg_stop(), True))
 
+    # --- Refactored high-level API (no BLE): config, serialization, wiring ---
+    import inspect
+    import json
+    import tempfile
+
+    # from_config parses address/key/tz/name/stations.
+    cfg = {"devices": [{"name": "Test", "address": "AA:BB", "tz_offset_sec": -18000,
+                        "stations": 4, "network_key": "00112233445566778899aabbccddeeff"}]}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(cfg, f); path = f.name
+    dev = B.BHyveXD.from_config(path)
+    results.append(check("from_config parses address", dev.address, "AA:BB"))
+    results.append(check("from_config parses tz + name", (dev.tz_offset_sec, dev.name), (-18000, "Test")))
+    results.append(check("from_config parses key (16 bytes)", len(dev.key), 16))
+
+    # to_dict serializes the exact keys the REST API returns.
+    st = B.DeviceStatus(device_time=1782891180, run_state=4, seconds_remaining=120, is_watering=True)
+    d = st.to_dict()
+    results.append(check("to_dict has the API keys",
+                         sorted(d.keys()),
+                         sorted(["clock", "device_time", "is_watering", "run_state", "seconds_remaining"])))
+    results.append(check("to_dict reflects watering state", (d["is_watering"], d["seconds_remaining"]), (True, 120)))
+
+    # High-level control methods exist and are async (shared by CLI + server).
+    for m in ("status", "start", "stop", "sync_clock"):
+        fn = getattr(B.BHyveXD, m, None)
+        results.append(check(f"BHyveXD.{m} is an async method",
+                             fn is not None and inspect.iscoroutinefunction(fn), True))
+
+    # parse_reply: idle status has is_watering False, no seconds.
+    idle = B.parse_reply(B._wrap(B._fb(16, B._fv(1, 1))))
+    results.append(check("parse_reply idle -> not watering", (idle.is_watering, idle.seconds_remaining), (False, None)))
+
     n = sum(results)
     print(f"\n{n}/{len(results)} checks passed"
-          + ("  ✅ distilled library is byte-correct" if n == len(results) else "  ❌ MISMATCH"))
+          + ("  ✅ library + refactored API verified" if n == len(results) else "  ❌ MISMATCH"))
     return 0 if n == len(results) else 1
 
 
