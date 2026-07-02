@@ -133,7 +133,14 @@ def msg_start(station: int, duration_sec: int) -> bytes:
 
 
 def msg_stop() -> bytes:
+    """Global stop — manual mode with empty station list (stops ALL zones)."""
     return _wrap(bytes.fromhex("720408021200"))
+
+
+def msg_stop_zone(station: int) -> bytes:
+    """Stop a single zone by commanding it to run for 0 seconds (manual mode
+    with that station, duration 0). station is 1-indexed."""
+    return msg_start(station, 0)
 
 
 def msg_get_status() -> bytes:
@@ -313,7 +320,12 @@ class _Session:
         await self._send(msg_start(station, duration_sec))
 
     async def stop(self):
+        """Stop ALL zones."""
         await self._send(msg_stop())
+
+    async def stop_zone(self, station: int):
+        """Stop a single zone (manual watering, 0 seconds)."""
+        await self._send(msg_stop_zone(station))
 
     async def read_status(self, *, wait: float = 1.5) -> DeviceStatus:
         """Query status and decode the newest valid reply. The device's replies

@@ -98,10 +98,17 @@ async function startZone(z){
   catch(e){log("✗ start: "+e.message,"err");}
   setBusy(false);
 }
+async function stopZone(z){
+  if(busy)return; setBusy(true,`stopping zone ${z}… (~10s)`); log(`→ STOP zone ${z}…`);
+  try{const r=await api("POST",`/api/zones/${z}/stop`); render(r);
+    log(r.confirmed_idle?`✓ zone ${z} CONFIRMED idle`:`⚠ zone ${z} stop not confirmed`,r.confirmed_idle?"ok":"warn");}
+  catch(e){log("✗ stop zone: "+e.message,"err");}
+  setBusy(false);
+}
 async function stopAll(){
-  if(busy)return; setBusy(true,"stopping… (~10s)"); log("→ STOP all…");
+  if(busy)return; setBusy(true,"stopping all… (~10s)"); log("→ STOP all…");
   try{const r=await api("POST","/api/stop"); render(r);
-    log(r.confirmed_idle?"✓ CONFIRMED idle":"⚠ stop not confirmed",r.confirmed_idle?"ok":"warn");}
+    log(r.confirmed_idle?"✓ CONFIRMED idle (all)":"⚠ stop not confirmed",r.confirmed_idle?"ok":"warn");}
   catch(e){log("✗ stop: "+e.message,"err");}
   setBusy(false);
 }
@@ -112,11 +119,14 @@ function buildValves(n){
     <div class="zone">
       <div class="zlabel"><span class="dot" id="dot${z}"></span>Valve ${z}</div>
       <input type="number" id="min${z}" value="5" min="1" max="120" step="1"><span class="min">min</span>
-      <div class="brow"><button class="bon" onclick="startZone(${z})">Turn ON</button></div>
+      <div class="brow">
+        <button class="bon" onclick="startZone(${z})">Turn ON</button>
+        <button class="boff" onclick="stopZone(${z})">Turn OFF</button>
+      </div>
     </div>`;
-  h+=`<div class="tools"><button class="boff" onclick="stopAll()">■ Stop all valves</button></div>
+  h+=`<div class="tools"><button class="ghost" onclick="stopAll()">■ Stop ALL valves</button></div>
       <div class="hint">Each action does a full Bluetooth session (~10s). Wake the timer by pressing
-      a button on it if a command times out. Stop is device-wide (stops all zones).</div>`;
+      a button on it if a command times out. “Turn OFF” stops that valve; “Stop ALL” stops every valve.</div>`;
   $("#valves").innerHTML=h;
 }
 

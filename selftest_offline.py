@@ -76,6 +76,29 @@ def main():
     st = B.parse_reply(reply)
     results.append(check("parse_reply detects watering (run_state 4)", st.is_watering, True))
 
+    # Per-zone stop: msg_stop_zone(z) == manual watering for that station, 0s.
+    # It must (a) be a valid framed message, (b) decode to field 14 with the
+    # target station (0-indexed) and duration 0, distinct from the global stop.
+    for z in (1, 2, 3, 4):
+        m = B.msg_stop_zone(z)
+        body, crc = m[:-2], struct.unpack("<H", m[-2:])[0]
+        results.append(check(f"msg_stop_zone({z}) CRC valid", B._crc16_ccitt(body, 0), crc))
+        # decode station + duration
+        st_id = dur = None
+        for fn, wt, v in B.iter_fields(m[6:-2]):
+            if fn == 14:
+                for f2, w2, v2 in B.iter_fields(v):
+                    if f2 == 2:
+                        for f3, w3, v3 in B.iter_fields(v2):
+                            if f3 == 3:
+                                for f4, w4, v4 in B.iter_fields(v3):
+                                    if f4 == 1: st_id = v4
+                                    elif f4 == 2: dur = v4
+        results.append(check(f"msg_stop_zone({z}) targets station {z-1}, duration 0",
+                             (st_id, dur), (z - 1, 0)))
+    results.append(check("msg_stop_zone(1) != global msg_stop()",
+                         B.msg_stop_zone(1) != B.msg_stop(), True))
+
     n = sum(results)
     print(f"\n{n}/{len(results)} checks passed"
           + ("  ✅ distilled library is byte-correct" if n == len(results) else "  ❌ MISMATCH"))
