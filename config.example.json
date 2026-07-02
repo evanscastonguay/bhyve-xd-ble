@@ -1,0 +1,11 @@
+{
+  "devices": [
+    {
+      "name": "Smart Hose Tap Timer",
+      "address": "44:67:55:D8:7A:B9",
+      "network_key": "PUT_YOUR_16_BYTE_HEX_NETWORK_KEY_HERE",
+      "tz_offset_sec": -14400,
+      "note": "Linux: address=MAC. macOS: address=CoreBluetooth UUID (use cli.py scan)."
+    }
+  ]
+}
