@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B-Hyve XD — Local Control</title>
+<style>
+  :root{--bg:#0e1116;--card:#161b22;--line:#2b3440;--tx:#e6edf3;--mut:#8b949e;
+        --on:#238636;--on2:#2ea043;--off:#a1401a;--off2:#c05621;--blue:#1f6feb;--drop:#3fb0ff;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--tx);padding:22px}
+  h1{font-size:20px;margin:0 0 2px}
+  .sub{color:var(--mut);font-size:13px;margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px;max-width:560px}
+  .statusrow{display:flex;gap:22px;flex-wrap:wrap;align-items:center;font-size:14px}
+  .statusrow b{color:var(--tx)}
+  .pill{font-size:12px;padding:3px 10px;border-radius:20px;font-weight:600}
+  .pill.idle{background:#30363d;color:var(--mut)} .pill.wet{background:#12331d;color:#3fb950}
+  .zone{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line)}
+  .zone:first-of-type{border-top:none}
+  .zlabel{width:96px;font-weight:600}
+  .zlabel .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#30363d;margin-right:8px;vertical-align:middle}
+  .zlabel .dot.on{background:var(--on2);box-shadow:0 0 7px var(--on2)}
+  input[type=number]{width:56px;background:#0d1117;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px}
+  .min{color:var(--mut);font-size:12px}
+  button{border:none;border-radius:7px;padding:8px 14px;font-weight:600;cursor:pointer;color:#fff;font-size:13px}
+  button:active{transform:translateY(1px)} button:disabled{opacity:.5;cursor:wait}
+  .bon{background:var(--on)} .bon:hover{background:var(--on2)}
+  .boff{background:var(--off)} .boff:hover{background:var(--off2)}
+  .ghost{background:#21262d}
+  .brow{margin-left:auto;display:flex;gap:8px}
+  .tools{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+  #busy{display:none;align-items:center;gap:10px;color:var(--drop);font-size:13px;margin:8px 0}
+  .spin{width:14px;height:14px;border:2px solid #2b3440;border-top-color:var(--drop);border-radius:50%;animation:s .8s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+  #log{max-width:560px;background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:12px;
+       font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--mut);height:130px;overflow:auto;white-space:pre-wrap}
+  .ok{color:#3fb950}.err{color:#f85149}.warn{color:#d29922}
+  .hint{color:var(--mut);font-size:12px;margin-top:10px;line-height:1.5}
+</style>
+</head>
+<body>
+  <h1>🚰 B-Hyve XD — Local Control</h1>
+  <div class="sub">Direct Bluetooth · no cloud · no hub</div>
+
+  <div class="card">
+    <div class="statusrow">
+      <span>Clock: <b id="clock">—</b></span>
+      <span>State: <span id="state" class="pill idle">unknown</span></span>
+      <span id="remain" class="min"></span>
+      <button class="ghost" style="margin-left:auto" onclick="refresh()">↻ Refresh</button>
+    </div>
+    <div id="busy"><span class="spin"></span><span id="busytxt">working… (BLE takes ~10s)</span></div>
+  </div>
+
+  <div class="card" id="valves"></div>
+
+  <div id="log"></div>
+
+<script>
+const $=(s)=>document.querySelector(s);
+const log=(m,c="")=>{const t=new Date().toLocaleTimeString();$("#log").innerHTML+=`<div class="${c}">[${t}] ${m}</div>`;$("#log").scrollTop=1e9;};
+let busy=false;
+function setBusy(on,txt){busy=on;$("#busy").style.display=on?"flex":"none";if(txt)$("#busytxt").textContent=txt;
+  document.querySelectorAll("button").forEach(b=>b.disabled=on);}
+
+async function api(method,path,body){
+  const opt={method,headers:{"Content-Type":"application/json"}};
+  if(body)opt.body=JSON.stringify(body);
+  const r=await fetch(path,opt);
+  let d; try{d=await r.json()}catch{d={}}
+  if(!r.ok)throw new Error(d.detail||`HTTP ${r.status}`);
+  return d;
+}
+
+function render(st){
+  $("#clock").textContent=st.clock||"—";
+  const wet=st.is_watering;
+  const el=$("#state"); el.textContent=wet?`watering`:`idle`;
+  el.className="pill "+(wet?"wet":"idle");
+  $("#remain").textContent=(wet&&st.seconds_remaining)?`${st.seconds_remaining}s remaining`:"";
+  document.querySelectorAll(".dot").forEach(d=>d.classList.remove("on"));
+  // we don't get the active zone number back reliably; light all if watering
+  if(wet)document.querySelectorAll(".dot").forEach(d=>d.classList.add("on"));
+}
+
+async function refresh(){
+  if(busy)return; setBusy(true,"reading status… (~10s)"); log("→ status…");
+  try{const st=await api("GET","/api/status"); render(st); log(`✓ clock=${st.clock} watering=${st.is_watering}`,"ok");}
+  catch(e){log("✗ status: "+e.message,"err");}
+  setBusy(false);
+}
+async function startZone(z){
+  if(busy)return; const mins=parseFloat($("#min"+z).value)||5;
+  setBusy(true,`starting zone ${z}… (~10s)`); log(`→ START zone ${z} for ${mins} min…`);
+  try{const r=await api("POST",`/api/zones/${z}/start`,{minutes:mins}); render(r);
+    log(r.confirmed_watering?`✓ zone ${z} CONFIRMED watering (${r.seconds_remaining}s)`:`⚠ sent but not confirmed`,r.confirmed_watering?"ok":"warn");}
+  catch(e){log("✗ start: "+e.message,"err");}
+  setBusy(false);
+}
+async function stopAll(){
+  if(busy)return; setBusy(true,"stopping… (~10s)"); log("→ STOP all…");
+  try{const r=await api("POST","/api/stop"); render(r);
+    log(r.confirmed_idle?"✓ CONFIRMED idle":"⚠ stop not confirmed",r.confirmed_idle?"ok":"warn");}
+  catch(e){log("✗ stop: "+e.message,"err");}
+  setBusy(false);
+}
+
+function buildValves(n){
+  let h="";
+  for(let z=1;z<=n;z++)h+=`
+    <div class="zone">
+      <div class="zlabel"><span class="dot" id="dot${z}"></span>Valve ${z}</div>
+      <input type="number" id="min${z}" value="5" min="1" max="120" step="1"><span class="min">min</span>
+      <div class="brow"><button class="bon" onclick="startZone(${z})">Turn ON</button></div>
+    </div>`;
+  h+=`<div class="tools"><button class="boff" onclick="stopAll()">■ Stop all valves</button></div>
+      <div class="hint">Each action does a full Bluetooth session (~10s). Wake the timer by pressing
+      a button on it if a command times out. Stop is device-wide (stops all zones).</div>`;
+  $("#valves").innerHTML=h;
+}
+
+async function init(){
+  try{const h=await api("GET","/api/health"); buildValves(h.stations||4);
+    log(`Loaded ${h.name} (${h.address}). Ready.`,"ok");}
+  catch(e){buildValves(4); log("health failed: "+e.message,"err");}
+}
+init();
+</script>
+</body>
+</html>
