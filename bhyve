@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Convenience wrapper: run the bhyve-xd CLI with the repo's venv.
+# Usage:  ./bhyve <command> [args]   e.g.  ./bhyve status   ./bhyve start 1 300
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ ! -x "$DIR/venv/bin/python" ]; then
+  echo "venv not found — run ./setup.sh first" >&2
+  exit 1
+fi
+exec "$DIR/venv/bin/python" "$DIR/cli.py" "$@"

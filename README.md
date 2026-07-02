@@ -52,8 +52,13 @@ password). See `config.example.json`.
 ## Setup
 
 ```bash
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
+./setup.sh          # creates venv/, installs deps, runs offline tests
+```
+
+Then use the **`./bhyve`** wrapper (no need to activate the venv or type `python3`):
+
+```bash
+./bhyve status
 ```
 
 ## Onboarding (once) — just your Orbit account
@@ -62,8 +67,8 @@ No hand-editing of keys or addresses. Give your Orbit **email + password** and i
 sets everything up:
 
 ```bash
-python cli.py login            # email+password -> writes config.json
-python cli.py login --dry-run  # just list your account's timers, write nothing
+./bhyve login            # email+password -> writes config.json
+./bhyve login --dry-run  # just list your account's timers, write nothing
 ```
 
 `login` logs in to the Orbit cloud, fetches each timer's **network key**, resolves
@@ -83,17 +88,19 @@ control is 100% local BLE (no cloud).
 ## Usage
 
 ```bash
-python cli.py status            # read clock / watering state / battery
-python cli.py settime           # sync the clock to now
-python cli.py start 1 300       # start zone 1 for 300s (confirms watering)
-python cli.py stop              # stop all zones (confirms idle)
-python cli.py stop 1            # stop zone 1 only
-python cli.py selftest          # autonomous: set -> read -> start -> read -> stop -> read
-python cli.py scan              # list BLE devices
+./bhyve status            # read clock / watering state / battery
+./bhyve settime           # sync the clock to now
+./bhyve start 1 300       # start zone 1 for 300s (confirms watering)
+./bhyve stop              # stop all zones (confirms idle)
+./bhyve stop 1            # stop zone 1 only
+./bhyve selftest          # autonomous: set -> read -> start -> read -> stop -> read
+./bhyve scan              # list BLE devices
 
 # Several timers on the account? target one by name or index:
-python cli.py --device Back start 1 300
+./bhyve --device Back start 1 300
 ```
+
+(`./bhyve <cmd>` is just `venv/bin/python cli.py <cmd>`.)
 
 Library use:
 
