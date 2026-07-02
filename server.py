@@ -97,8 +97,25 @@ async def start(zone: int, body: StartBody):
             "confirmed_watering": st.is_watering, **_status_dict(st)}
 
 
+@app.post("/api/zones/{zone}/stop")
+async def stop_zone(zone: int):
+    if not 1 <= zone <= 4:
+        raise HTTPException(400, "zone must be 1..4")
+    dev, _ = _load()
+    async with _ble_lock:
+        try:
+            async with dev.session() as s:
+                await s.arm()
+                await s.stop_zone(zone)
+                st = await s.read_status()
+        except Exception as err:  # noqa: BLE001
+            raise HTTPException(503, f"BLE error: {err}") from err
+    return {"zone": zone, "confirmed_idle": not st.is_watering, **_status_dict(st)}
+
+
 @app.post("/api/stop")
 async def stop():
+    """Stop ALL zones."""
     dev, _ = _load()
     async with _ble_lock:
         try:

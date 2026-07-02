@@ -29,3 +29,8 @@ POST /api/stop
      -> {"confirmed_idle":true,"run_state":1}
 ```
 Web UI opened at http://<host>:8000/ — 4 valves with ON buttons + Stop all + live status.
+
+## Per-zone stop — TDD + live (2026-07-01)
+Added msg_stop_zone(station) = manual watering at 0s. Offline: 20/20 byte checks pass.
+Live via API: start zone 1 -> watering 180s; POST /api/zones/1/stop -> confirmed idle.
+Web UI now has per-valve Turn ON / Turn OFF plus a global Stop ALL.
