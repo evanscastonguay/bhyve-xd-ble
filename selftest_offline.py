@@ -132,6 +132,33 @@ def main():
     idle = B.parse_reply(B._wrap(B._fb(16, B._fv(1, 1))))
     results.append(check("parse_reply idle -> not watering", (idle.is_watering, idle.seconds_remaining), (False, None)))
 
+    # --- Phase 0: host timezone, device MAC in reply, multi-device select ---
+
+    # host_tz_offset() returns the host's UTC offset in seconds (int).
+    from datetime import datetime as _dt
+    host_off = int(_dt.now().astimezone().utcoffset().total_seconds())
+    results.append(check("host_tz_offset() == host UTC offset", B.host_tz_offset(), host_off))
+
+    # parse_reply extracts the device MAC from field 1 (6 bytes) -> "AA:BB:...".
+    reply = B._wrap(B._fb(1, bytes.fromhex("aabbccddeeff")) + B._fb(16, B._fv(1, 1)))
+    st_mac = B.parse_reply(reply)
+    results.append(check("parse_reply extracts device_mac", st_mac.device_mac, "AA:BB:CC:DD:EE:FF"))
+
+    # from_config(device=...) selects by index and by name; default tz = host.
+    cfg2 = {"devices": [
+        {"name": "Front", "address": "A1", "network_key": "00" * 16},
+        {"name": "Back", "address": "B2", "network_key": "11" * 16, "tz_offset_sec": -18000},
+    ]}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(cfg2, f); p2 = f.name
+    results.append(check("from_config default -> first device", B.BHyveXD.from_config(p2).address, "A1"))
+    results.append(check("from_config device=1 (index)", B.BHyveXD.from_config(p2, device=1).address, "B2"))
+    results.append(check("from_config device='Back' (name)", B.BHyveXD.from_config(p2, device="Back").address, "B2"))
+    results.append(check("from_config default tz -> host when absent",
+                         B.BHyveXD.from_config(p2).tz_offset_sec, host_off))
+    results.append(check("from_config keeps explicit tz when present",
+                         B.BHyveXD.from_config(p2, device="Back").tz_offset_sec, -18000))
+
     n = sum(results)
     print(f"\n{n}/{len(results)} checks passed"
           + ("  ✅ library + refactored API verified" if n == len(results) else "  ❌ MISMATCH"))
