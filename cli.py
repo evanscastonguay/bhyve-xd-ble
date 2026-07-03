@@ -13,6 +13,7 @@ reads status back for confirmation.
     python cli.py stop 1              # stop zone 1 only
     python cli.py selftest            # autonomous set->read->start->read->stop->read
     python cli.py scan                # list nearby BLE devices (find the address)
+    python cli.py login [email]       # cloud login -> print devices + keys (--dry-run)
 """
 import asyncio
 import sys
@@ -66,6 +67,43 @@ async def cmd_selftest():
         print(f"[3] stop           -> watering={st.is_watering}  {'PASS' if not st.is_watering else 'FAIL'}")
 
 
+async def cmd_login(email=None, *, show_key=False):
+    """Cloud login -> print the account's devices with their BLE network keys.
+
+    Dry run only (Phase 1): nothing is written. The password is read from a hidden
+    prompt and never persisted or logged. Address resolution + config writing land
+    in later phases (cli.py login without --dry-run).
+    """
+    import getpass
+
+    from onboarding import CloudError, cloud_fetch
+
+    if not email:
+        email = input("Orbit account email: ").strip()
+    password = getpass.getpass("Orbit password (hidden): ")
+    try:
+        devices = await cloud_fetch(email, password)
+    except CloudError as e:
+        print(f"login failed: {e}")
+        return
+    if not devices:
+        print("logged in, but no controllable B-Hyve devices found on this account.")
+        return
+    print(f"\nfound {len(devices)} device(s):")
+    for i, d in enumerate(devices):
+        key = d.get("network_key")
+        if not key:
+            keyview = "(no key!)"
+        elif show_key:
+            keyview = key
+        else:
+            keyview = f"****{key[-4:]} ({len(key)} hex chars) ✓"
+        print(f"  [{i}] {d['name']}  mac={d.get('mac')}  stations={d.get('stations')}  "
+              f"hw={d.get('hardware')} fw={d.get('firmware')}  key={keyview}")
+    print("\n(dry run — no config written. Re-run with --show-key to reveal the full "
+          "key. Address resolution + config writing arrive in a later phase.)")
+
+
 async def cmd_scan():
     from bleak import BleakScanner
     print("scanning 12s...")
@@ -92,6 +130,11 @@ def main():
         asyncio.run(cmd_selftest())
     elif cmd == "scan":
         asyncio.run(cmd_scan())
+    elif cmd == "login":
+        rest = a[1:]
+        show_key = "--show-key" in rest
+        pos = [x for x in rest if not x.startswith("--")]   # --dry-run is the default
+        asyncio.run(cmd_login(pos[0] if pos else None, show_key=show_key))
     else:
         print(__doc__)
 
