@@ -1,6 +1,7 @@
 bleak>=0.21
 bleak-retry-connector>=3.0
 cryptography>=41.0
+aiohttp>=3.9              # cloud login only (onboarding.py); not needed for BLE control
 fastapi>=0.110
 uvicorn>=0.29
 pydantic>=2.0
