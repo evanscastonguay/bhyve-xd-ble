@@ -26,6 +26,7 @@ the onboarding plan calls for.
 from __future__ import annotations
 
 import base64
+import platform
 
 # Re-exported so onboarding is the single "setup entry point"; the implementation
 # lives in bhyve_xd (one source of truth) and is used to default the device clock.
@@ -66,6 +67,10 @@ class CloudConnectionError(CloudError):
     """Network failure reaching api.orbitbhyve.com (DNS/TLS/timeout)."""
 
 
+class ResolveError(Exception):
+    """Could not resolve a device's local BLE address (macOS UUID pairing)."""
+
+
 # --------------------------------------------------------------------------- #
 # Pure helpers (no I/O) — the offline self-test exercises these directly.
 # --------------------------------------------------------------------------- #
@@ -87,6 +92,11 @@ def _check_mfa(body: object) -> None:
         body.get(k) for k in ("mfa_required", "require_two_factor", "two_factor_required")
     ):
         raise MFARequired("account requires multi-factor auth — not supported by this flow")
+
+
+def current_platform() -> str:
+    """'macos' on Darwin, else 'linux' — selects the address-resolution strategy."""
+    return "macos" if platform.system() == "Darwin" else "linux"
 
 
 def _b64_to_hex(b64: str | None) -> str | None:
@@ -224,3 +234,57 @@ async def _fetch_mesh(s, headers: dict, mesh_id: str, timeout) -> dict:
         except aiohttp.ClientError as err:
             raise CloudConnectionError(f"cannot reach {CLOUD_API_BASE}: {err}") from err
     raise CloudError(f"no key path returned a mesh for {mesh_id} (last status {last})")
+
+
+# --------------------------------------------------------------------------- #
+# Address resolution / pairing — cloud gives a MAC; BLE control needs a local
+# address. On Linux that's the MAC; on macOS it's an opaque per-Mac UUID we must
+# discover by connecting and reading the device's own MAC back over BLE.
+# --------------------------------------------------------------------------- #
+async def resolve_address(mac: str, network_key: str, *, platform_name: str | None = None,
+                          scan_timeout: float = 12.0, max_probe: int = 12) -> str:
+    """Resolve the local BLE address to control the timer whose cloud MAC is `mac`:
+
+      Linux/BlueZ -> the MAC itself (BlueZ addresses peripherals by MAC).
+      macOS       -> scan, probe candidates strongest-RSSI first, read each one's
+                     own MAC over BLE, and return the opaque UUID whose MAC matches.
+
+    Non-B-Hyve devices are fast-rejected (no fe32 service) without ever being armed.
+    On macOS, wake the timer (press/hold its button) right before calling.
+    """
+    p = platform_name or current_platform()
+    if p == "linux":
+        return mac
+    return await _resolve_macos(mac, network_key, scan_timeout=scan_timeout, max_probe=max_probe)
+
+
+async def _resolve_macos(mac: str, network_key: str, *, scan_timeout: float, max_probe: int) -> str:
+    from bleak import BleakScanner
+
+    from bhyve_xd import BHyveXD, NotABHyveError
+
+    devs = await BleakScanner.discover(timeout=scan_timeout, return_adv=True)
+    # macOS hides the fe32 service in advertisements, so we can't pre-filter by
+    # service UUID; instead probe strongest-first and let the session fast-reject
+    # non-B-Hyve devices (NotABHyveError) before arming. Cap the probes at max_probe.
+    candidates = sorted(((adv.rssi if adv.rssi is not None else -999, addr)
+                         for addr, (_d, adv) in devs.items()), reverse=True)[:max_probe]
+    tried = 0
+    for _rssi, addr in candidates:
+        try:
+            dev = BHyveXD(addr, network_key)     # candidate UUID + the account key
+            # Fast probe: 1 connect attempt + short find so a wrong/asleep device
+            # fails quickly instead of retrying for the full scan_timeout.
+            async with dev.session(scan_timeout=4.0, connect_attempts=1) as sess:
+                await sess.arm()
+                st = await sess.read_status()
+            tried += 1
+            if st.device_mac and st.device_mac.upper() == mac.upper():
+                return addr
+        except NotABHyveError:
+            continue  # not a B-Hyve; never armed
+        except Exception:
+            continue  # asleep / connect failed / wrong device
+    raise ResolveError(
+        f"could not find timer {mac} nearby (checked {len(candidates)} candidate(s), "
+        f"{tried} B-Hyve) — wake it (press/hold its button), keep it close to the Mac, and retry")

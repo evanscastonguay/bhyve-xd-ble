@@ -230,6 +230,19 @@ def main():
     results.append(check("_build_devices reads network_topology_id + network_key field",
                          (built2[0]["network_key"], built2[0]["stations"]), (raw.hex(), 6)))
 
+    # --- Phase 2: address resolution dispatch (no BLE) ---
+    import asyncio
+
+    results.append(check("current_platform() in {macos, linux}",
+                         O.current_platform() in ("macos", "linux"), True))
+    # Linux branch returns the MAC untouched and never touches the BLE stack.
+    linux_addr = asyncio.run(
+        O.resolve_address("44:67:55:D8:7A:B9", "00" * 16, platform_name="linux"))
+    results.append(check("resolve_address(platform=linux) -> MAC unchanged",
+                         linux_addr, "44:67:55:D8:7A:B9"))
+    results.append(check("NotABHyveError is importable from bhyve_xd",
+                         hasattr(B, "NotABHyveError"), True))
+
     n = sum(results)
     print(f"\n{n}/{len(results)} checks passed"
           + ("  ✅ library + refactored API verified" if n == len(results) else "  ❌ MISMATCH"))
