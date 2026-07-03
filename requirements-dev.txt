@@ -1,0 +1,5 @@
+# Test-only dependencies (the runtime needs just requirements.txt).
+# The e2e suite patches bleak/aiohttp, so no radio or network is touched — but
+# bleak + bleak-retry-connector (from requirements.txt) must be importable.
+-r requirements.txt
+pytest>=8.0
