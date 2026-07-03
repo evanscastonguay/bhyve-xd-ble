@@ -159,6 +159,77 @@ def main():
     results.append(check("from_config keeps explicit tz when present",
                          B.BHyveXD.from_config(p2, device="Back").tz_offset_sec, -18000))
 
+    # --- Phase 1: cloud onboarding (parsing + error mapping, no network) ---
+    import base64
+    import onboarding as O
+
+    # HTTP status -> typed error mapping (the whole cloud error contract).
+    def _maps(status, exc):
+        try:
+            O._raise_for_status(status, context="t")
+        except exc:
+            return True
+        except Exception:
+            return False
+        return False
+
+    results.append(check("_raise_for_status 429 -> RateLimited", _maps(429, O.RateLimited), True))
+    results.append(check("_raise_for_status 401 -> AuthError", _maps(401, O.AuthError), True))
+    results.append(check("_raise_for_status 403 -> AuthError", _maps(403, O.AuthError), True))
+    results.append(check("_raise_for_status 400 -> AuthError", _maps(400, O.AuthError), True))
+    results.append(check("_raise_for_status 500 -> CloudError", _maps(500, O.CloudError), True))
+    ok200 = True
+    try:
+        O._raise_for_status(200, context="t")
+    except Exception:
+        ok200 = False
+    results.append(check("_raise_for_status 200 -> no error", ok200, True))
+    results.append(check("typed errors subclass CloudError (catch-all works)",
+                         all(issubclass(e, O.CloudError)
+                             for e in (O.AuthError, O.RateLimited, O.MFARequired,
+                                       O.CloudConnectionError)), True))
+
+    # MFA challenge surfaces as MFARequired (not a confusing 'no api key').
+    mfa_raised = False
+    try:
+        O._check_mfa({"mfa_required": True})
+    except O.MFARequired:
+        mfa_raised = True
+    results.append(check("_check_mfa flags an MFA challenge", mfa_raised, True))
+
+    # base64 network key -> hex; MAC formatting.
+    raw = bytes.fromhex("00112233445566778899aabbccddeeff")
+    key_b64 = base64.b64encode(raw).decode()
+    results.append(check("_b64_to_hex decodes the network key", O._b64_to_hex(key_b64), raw.hex()))
+    results.append(check("_b64_to_hex(None) -> None", O._b64_to_hex(None), None))
+    results.append(check("_format_mac 12-hex -> AA:BB:..", O._format_mac("aabbccddeeff"),
+                         "AA:BB:CC:DD:EE:FF"))
+    results.append(check("_format_mac bad length -> None", O._format_mac("abc"), None))
+
+    # _build_devices joins /devices with mesh keys on mocked cloud JSON:
+    # drops the bridge and the mesh-less device, keeps the one real timer.
+    raw_devices = [
+        {"name": "Front Yard", "type": "sprinkler_timer", "mac_address": "aabbccddeeff",
+         "num_stations": 4, "hardware_version": "HT34A", "firmware_version": "0107",
+         "mesh_id": "m1"},
+        {"name": "Wi-Fi Hub", "type": "bridge", "mesh_id": "m1"},               # dropped
+        {"name": "Orphan", "type": "sprinkler_timer", "mac_address": "010203040506"},  # no mesh
+    ]
+    built = O._build_devices(raw_devices, {"m1": {"ble_network_key": key_b64}})
+    results.append(check("_build_devices drops bridge + mesh-less -> 1 device", len(built), 1))
+    results.append(check("_build_devices maps name/mac/stations/key",
+                         (built[0]["name"], built[0]["mac"], built[0]["stations"],
+                          built[0]["network_key"]),
+                         ("Front Yard", "AA:BB:CC:DD:EE:FF", 4, raw.hex())))
+
+    # Newer-schema account: network_topology_id + the 'network_key' mesh field.
+    built2 = O._build_devices(
+        [{"name": "Back", "type": "timer", "mac_address": "aabbccddeeff",
+          "num_stations": 6, "network_topology_id": "t9"}],
+        {"t9": {"network_key": key_b64}})
+    results.append(check("_build_devices reads network_topology_id + network_key field",
+                         (built2[0]["network_key"], built2[0]["stations"]), (raw.hex(), 6)))
+
     n = sum(results)
     print(f"\n{n}/{len(results)} checks passed"
           + ("  ✅ library + refactored API verified" if n == len(results) else "  ❌ MISMATCH"))
