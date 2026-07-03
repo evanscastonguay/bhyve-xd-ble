@@ -89,6 +89,23 @@ async with dev.session() as s:
     await s.stop()
 ```
 
+## Testing
+
+Two layers, both hardware-free and repeatable:
+
+```bash
+python selftest_offline.py                       # 55 offline byte/logic checks
+pip install -r requirements-dev.txt
+python -m pytest test_e2e.py -q                  # 19 end-to-end tests (~0.2s)
+```
+
+`test_e2e.py` runs every operation against a **fake B-Hyve** (`FakeTimer`) that
+emulates the HT34A at the byte level — AES handshake, frame decrypt/reassembly,
+watering state, and correctly-encrypted status notifications. bleak and aiohttp
+are patched, so no radio or network is touched. Reading `is_watering=True` back
+proves the whole chain: `arm → command → encrypted notification → counter resync
+→ parse → DeviceStatus`, plus the CLI, REST API, macOS pairing, and cloud login.
+
 ## Architecture (one source of truth)
 
 All Bluetooth/protocol logic lives in **`bhyve_xd.py`**. The CLI and the REST
@@ -112,7 +129,9 @@ the single serializer. Change the protocol once, in one place.
 | `cli.py` | thin CLI over `bhyve_xd` |
 | `server.py` | thin FastAPI REST API over `bhyve_xd` |
 | `index.html` | web UI (calls the REST API) |
+| `onboarding.py` | one-time cloud login (`cloud_fetch`) + macOS address resolution (`resolve_address`) |
 | `selftest_offline.py` | offline byte checks (no device) — validates message builders |
+| `test_e2e.py` | end-to-end tests against a fake device (no hardware) — every operation |
 | `config.example.json` | copy to `config.json`, fill in address + network key |
 
 ## Credits
