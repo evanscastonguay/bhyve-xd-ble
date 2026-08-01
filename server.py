@@ -31,14 +31,22 @@ app = FastAPI(title="B-Hyve XD Local API", version="1.1.0")
 _ble_lock = asyncio.Lock()   # the radio does one thing at a time
 
 
-def _device() -> BHyveXD:
-    return BHyveXD.from_config(CONFIG)
+def _coerce_device(device):
+    """A ?device= query value is always a string; a purely-numeric one selects by
+    0-based index, otherwise by name. None -> the first configured device."""
+    if isinstance(device, str) and device.lstrip("-").isdigit():
+        return int(device)
+    return device
 
 
-async def _run(coro_fn):
+def _device(device=None) -> BHyveXD:
+    return BHyveXD.from_config(CONFIG, device=_coerce_device(device))
+
+
+async def _run(coro_fn, device=None):
     """Serialize BLE access and translate errors to HTTP. coro_fn takes the
     device and returns a DeviceStatus."""
-    dev = _device()
+    dev = _device(device)
     async with _ble_lock:
         try:
             return await coro_fn(dev)
@@ -55,36 +63,46 @@ async def index():
     return FileResponse(INDEX)
 
 
+@app.get("/api/devices")
+async def devices():
+    """List configured timers so the UI can offer a picker."""
+    import json
+    with open(CONFIG) as f:
+        devs = json.load(f)["devices"]
+    return [{"index": i, "name": d.get("name", "B-Hyve XD"),
+             "stations": int(d.get("stations", 4))} for i, d in enumerate(devs)]
+
+
 @app.get("/api/health")
-async def health():
-    d = _device()
+async def health(device: str | None = None):
+    d = _device(device)
     return {"ok": True, "name": d.name, "address": d.address, "stations": d.stations}
 
 
 @app.get("/api/status")
-async def status():
-    st = await _run(lambda d: d.status())
+async def status(device: str | None = None):
+    st = await _run(lambda d: d.status(), device)
     return st.to_dict()
 
 
 @app.post("/api/zones/{zone}/start")
-async def start(zone: int, body: StartBody):
+async def start(zone: int, body: StartBody, device: str | None = None):
     if not 1 <= zone <= 4:
         raise HTTPException(400, "zone must be 1..4")
-    st = await _run(lambda d: d.start(zone, int(body.minutes * 60)))
+    st = await _run(lambda d: d.start(zone, int(body.minutes * 60)), device)
     return {"zone": zone, "requested_minutes": body.minutes,
             "confirmed_watering": st.is_watering, **st.to_dict()}
 
 
 @app.post("/api/zones/{zone}/stop")
-async def stop_zone(zone: int):
+async def stop_zone(zone: int, device: str | None = None):
     if not 1 <= zone <= 4:
         raise HTTPException(400, "zone must be 1..4")
-    st = await _run(lambda d: d.stop(zone))
+    st = await _run(lambda d: d.stop(zone), device)
     return {"zone": zone, "confirmed_idle": not st.is_watering, **st.to_dict()}
 
 
 @app.post("/api/stop")
-async def stop_all():
-    st = await _run(lambda d: d.stop())
+async def stop_all(device: str | None = None):
+    st = await _run(lambda d: d.stop(), device)
     return {"confirmed_idle": not st.is_watering, **st.to_dict()}

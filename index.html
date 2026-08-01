@@ -22,6 +22,7 @@
   .zlabel .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#30363d;margin-right:8px;vertical-align:middle}
   .zlabel .dot.on{background:var(--on2);box-shadow:0 0 7px var(--on2)}
   input[type=number]{width:56px;background:#0d1117;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px}
+  select{background:#0d1117;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px}
   .min{color:var(--mut);font-size:12px}
   button{border:none;border-radius:7px;padding:8px 14px;font-weight:600;cursor:pointer;color:#fff;font-size:13px}
   button:active{transform:translateY(1px)} button:disabled{opacity:.5;cursor:wait}
@@ -43,6 +44,12 @@
   <h1>🚰 B-Hyve XD — Local Control</h1>
   <div class="sub">Direct Bluetooth · no cloud · no hub</div>
 
+  <div class="card" id="devcard" style="display:none;max-width:560px">
+    <label style="font-size:13px;color:var(--mut)">Timer:
+      <select id="device" onchange="onDeviceChange()"></select>
+    </label>
+  </div>
+
   <div class="card">
     <div class="statusrow">
       <span>Clock: <b id="clock">—</b></span>
@@ -61,13 +68,20 @@
 const $=(s)=>document.querySelector(s);
 const log=(m,c="")=>{const t=new Date().toLocaleTimeString();$("#log").innerHTML+=`<div class="${c}">[${t}] ${m}</div>`;$("#log").scrollTop=1e9;};
 let busy=false;
+let curDevice=null;   // selected timer (0-based index as a string); null = server default
 function setBusy(on,txt){busy=on;$("#busy").style.display=on?"flex":"none";if(txt)$("#busytxt").textContent=txt;
   document.querySelectorAll("button").forEach(b=>b.disabled=on);}
+
+// Append the selected device to a path so every BLE call targets the right timer.
+function devQ(path){
+  if(curDevice==null||curDevice==="")return path;
+  return path+(path.includes("?")?"&":"?")+"device="+encodeURIComponent(curDevice);
+}
 
 async function api(method,path,body){
   const opt={method,headers:{"Content-Type":"application/json"}};
   if(body)opt.body=JSON.stringify(body);
-  const r=await fetch(path,opt);
+  const r=await fetch(devQ(path),opt);
   let d; try{d=await r.json()}catch{d={}}
   if(!r.ok)throw new Error(d.detail||`HTTP ${r.status}`);
   return d;
@@ -130,10 +144,24 @@ function buildValves(n){
   $("#valves").innerHTML=h;
 }
 
-async function init(){
+async function loadDevice(){
   try{const h=await api("GET","/api/health"); buildValves(h.stations||4);
-    log(`Loaded ${h.name} (${h.address}). Ready.`,"ok");}
+    log(`Loaded ${h.name} (${h.address}). Ready.`,"ok");
+    await refresh();}
   catch(e){buildValves(4); log("health failed: "+e.message,"err");}
+}
+function onDeviceChange(){curDevice=$("#device").value; $("#log").innerHTML=""; loadDevice();}
+
+async function init(){
+  try{
+    const devs=await api("GET","/api/devices");     // curDevice still null -> no ?device
+    const sel=$("#device");
+    sel.innerHTML=devs.map(d=>`<option value="${d.index}">${d.name}</option>`).join("");
+    if(devs.length>1)$("#devcard").style.display="block";
+    curDevice=devs.length?String(devs[0].index):null;
+    sel.value=curDevice;
+  }catch(e){log("device list failed: "+e.message,"warn");}   // fall back to server default
+  await loadDevice();
 }
 init();
 </script>

@@ -14,6 +14,11 @@ reads status back for confirmation.
     python cli.py selftest            # autonomous set->read->start->read->stop->read
     python cli.py scan                # list nearby BLE devices (find the address)
     python cli.py login [email]       # cloud login -> print devices + keys (--dry-run)
+
+With multiple timers in config.json, pick one with --device (name or 0-based index);
+the default is the first device:
+    python cli.py status --device "New Timer"
+    python cli.py start 1 300 --device 1
 """
 import asyncio
 import sys
@@ -27,28 +32,28 @@ def _show(prefix, st):
           f"run_state={st.run_state}  seconds_remaining={st.seconds_remaining}")
 
 
-async def cmd_status():
-    _show("", await BHyveXD.from_config().status())
+async def cmd_status(device=None):
+    _show("", await BHyveXD.from_config(device=device).status())
 
 
-async def cmd_settime():
-    _show("clock synced -> ", await BHyveXD.from_config().sync_clock())
+async def cmd_settime(device=None):
+    _show("clock synced -> ", await BHyveXD.from_config(device=device).sync_clock())
 
 
-async def cmd_start(zone, secs):
-    st = await BHyveXD.from_config().start(zone, secs)
+async def cmd_start(zone, secs, device=None):
+    st = await BHyveXD.from_config(device=device).start(zone, secs)
     _show(f"START zone {zone} {secs}s -> {'OK' if st.is_watering else 'NOT CONFIRMED'} | ", st)
 
 
-async def cmd_stop(zone=None):
-    st = await BHyveXD.from_config().stop(zone)
+async def cmd_stop(zone=None, device=None):
+    st = await BHyveXD.from_config(device=device).stop(zone)
     what = "ALL" if zone is None else f"zone {zone}"
     _show(f"STOP {what} -> {'OK (idle)' if not st.is_watering else 'STILL WATERING'} | ", st)
 
 
-async def cmd_selftest():
+async def cmd_selftest(device=None):
     """Autonomous end-to-end confirmation via the device's own replies."""
-    dev = BHyveXD.from_config()
+    dev = BHyveXD.from_config(device=device)
     tzinfo = timezone(timedelta(seconds=dev.tz_offset_sec))
     target = datetime.now(tzinfo).replace(hour=3, minute=33, second=0, microsecond=0)
     async with dev.session() as s:
@@ -113,21 +118,41 @@ async def cmd_scan():
         print(f"  {d.name or '(no name)':24} rssi={adv.rssi:>4}  {addr}{tag}")
 
 
+def _extract_device(argv):
+    """Pull an optional `--device <name|idx>` (or `--device=...`) out of argv.
+    Returns (device, remaining_argv). A purely-numeric value becomes an int index."""
+    device, rest, i = None, [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--device":
+            device = argv[i + 1] if i + 1 < len(argv) else None
+            i += 2
+        elif a.startswith("--device="):
+            device = a.split("=", 1)[1]
+            i += 1
+        else:
+            rest.append(a)
+            i += 1
+    if isinstance(device, str) and device.lstrip("-").isdigit():
+        device = int(device)
+    return device, rest
+
+
 def main():
-    a = sys.argv[1:]
+    device, a = _extract_device(sys.argv[1:])
     if not a:
         print(__doc__); return
     cmd = a[0]
     if cmd == "status":
-        asyncio.run(cmd_status())
+        asyncio.run(cmd_status(device=device))
     elif cmd == "settime":
-        asyncio.run(cmd_settime())
+        asyncio.run(cmd_settime(device=device))
     elif cmd == "start":
-        asyncio.run(cmd_start(int(a[1]), int(a[2])))
+        asyncio.run(cmd_start(int(a[1]), int(a[2]), device=device))
     elif cmd == "stop":
-        asyncio.run(cmd_stop(int(a[1]) if len(a) > 1 else None))
+        asyncio.run(cmd_stop(int(a[1]) if len(a) > 1 else None, device=device))
     elif cmd == "selftest":
-        asyncio.run(cmd_selftest())
+        asyncio.run(cmd_selftest(device=device))
     elif cmd == "scan":
         asyncio.run(cmd_scan())
     elif cmd == "login":
