@@ -585,6 +585,63 @@ def test_catch_device_times_out_when_no_bhyve():
             asyncio.run(O.catch_device(TEST_KEY, scan_timeout=0.3))
 
 
+def test_write_config_creates_new_file(tmp_path):
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    dev = {"name": "New", "address": "UUID-A", "network_key": TEST_KEY, "mac": TEST_MAC, "stations": 4}
+    O.write_config(str(p), dev)
+    data = json.loads(p.read_text())
+    assert data["devices"] == [dev]
+
+
+def test_write_config_appends_distinct_device(tmp_path):
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    O.write_config(str(p), {"name": "A", "address": "UUID-A", "network_key": TEST_KEY,
+                            "mac": "44:67:55:D8:7A:B9", "stations": 4})
+    O.write_config(str(p), {"name": "B", "address": "UUID-B", "network_key": TEST_KEY,
+                            "mac": "44:67:55:D8:71:B0", "stations": 6})
+    data = json.loads(p.read_text())
+    assert [d["name"] for d in data["devices"]] == ["A", "B"]
+
+
+def test_write_config_updates_in_place_by_mac(tmp_path):
+    """Re-registering the same MAC (drifted address) updates in place — no duplicate,
+    and pre-existing fields are preserved."""
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    O.write_config(str(p), {"name": "New Timer", "address": "OLD-UUID", "network_key": TEST_KEY,
+                            "mac": TEST_MAC, "stations": 4, "tz_offset_sec": -14400})
+    O.write_config(str(p), {"name": "New Timer", "address": "NEW-UUID", "network_key": TEST_KEY,
+                            "mac": TEST_MAC, "stations": 4})
+    data = json.loads(p.read_text())
+    assert len(data["devices"]) == 1
+    assert data["devices"][0]["address"] == "NEW-UUID"
+    assert data["devices"][0]["tz_offset_sec"] == -14400   # prior field preserved
+
+
+def test_write_config_is_atomic_no_temp_left(tmp_path):
+    import onboarding as O
+    p = tmp_path / "config.json"
+    O.write_config(str(p), {"name": "A", "address": "UUID-A", "network_key": TEST_KEY,
+                            "mac": TEST_MAC, "stations": 4})
+    leftovers = [f.name for f in tmp_path.iterdir() if f.name != "config.json"]
+    assert leftovers == []
+
+
+def test_write_config_refuses_to_clobber_malformed(tmp_path):
+    import onboarding as O
+    p = tmp_path / "config.json"
+    p.write_text("{ this is not json ")
+    with pytest.raises(ValueError):
+        O.write_config(str(p), {"name": "A", "address": "UUID-A", "network_key": TEST_KEY,
+                                "mac": TEST_MAC, "stations": 4})
+    assert p.read_text() == "{ this is not json "   # original left intact
+
+
 def test_resolve_linux_returns_mac():
     import onboarding as O
     got = asyncio.run(O.resolve_address(TEST_MAC, TEST_KEY, platform_name="linux"))
