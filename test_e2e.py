@@ -456,6 +456,53 @@ def test_api_onboard_register_maps_catch_failure_to_504(monkeypatch, tmp_path):
     assert len(json.loads(cfg.read_text())["devices"]) == 1   # nothing written
 
 
+def test_api_onboard_register_cloud_path(monkeypatch, tmp_path):
+    """Web register with no saved key logs in, fetches the key, catches, and writes it."""
+    import json
+    import server
+    import onboarding as O
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": []}))          # no key
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    FETCHED = "aabbccddeeff00112233445566778899"
+
+    async def fake_cloud(email, password):
+        return [{"name": "Yard", "mac": "AA:BB:CC:DD:EE:01", "network_key": FETCHED, "stations": 4}]
+
+    async def fake_catch(key, *, want_mac=None, **kw):
+        assert key == FETCHED
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+
+    monkeypatch.setattr(O, "cloud_fetch", fake_cloud)
+    monkeypatch.setattr(O, "catch_device", fake_catch)
+    res = asyncio.run(server.onboard_register(
+        server.OnboardBody(name="Yard", email="me@x.com", password="pw")))
+    assert res["registered"]["mac"] == "AA:BB:CC:DD:EE:01"
+    assert "network_key" not in res["registered"]
+    assert json.loads(cfg.read_text())["devices"][0]["network_key"] == FETCHED
+
+
+def test_api_onboard_register_multi_device_409(monkeypatch, tmp_path):
+    import json
+    from fastapi import HTTPException
+    import server
+    import onboarding as O
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": []}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+
+    async def fake_cloud(email, password):
+        return [{"name": "A", "mac": "AA", "network_key": TEST_KEY, "stations": 4},
+                {"name": "B", "mac": "BB", "network_key": TEST_KEY, "stations": 4}]
+
+    monkeypatch.setattr(O, "cloud_fetch", fake_cloud)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.onboard_register(
+            server.OnboardBody(email="me@x.com", password="pw")))   # no device_mac
+    assert exc.value.status_code == 409
+
+
 def test_api_onboard_register_needs_creds_without_saved_key(monkeypatch, tmp_path):
     import json
     from fastapi import HTTPException
@@ -607,6 +654,98 @@ def test_cli_register_reports_catch_failure(tmp_path, monkeypatch, capsys):
     assert "failed" in out.lower()
     # config untouched (still just the one device)
     assert len(json.loads(p.read_text())["devices"]) == 1
+
+
+def test_cli_choose_device():
+    import cli
+    devs = [{"mac": "AA", "name": "Front"}, {"mac": "BB", "name": "Back"}]
+    assert cli._choose_device(devs, choose_fn=lambda _p: "1") is devs[1]
+    assert cli._choose_device(devs, choose_fn=lambda _p: "0") is devs[0]
+    assert cli._choose_device(devs, choose_fn=lambda _p: "9") is None      # out of range
+    assert cli._choose_device(devs, choose_fn=lambda _p: "x") is None      # non-numeric
+    assert cli._choose_device(devs, choose_fn=lambda _p: "") is None       # cancel
+
+
+def test_cli_register_cloud_first_writes_fetched_key(tmp_path, monkeypatch):
+    """First run: NO config yet. Log in to the cloud, fetch the key, catch the timer,
+    and write a config entry whose network_key is the FETCHED key."""
+    import getpass
+    import json
+    import cli
+    import onboarding as O
+    p = tmp_path / "config.json"                       # absent -> first run
+
+    FETCHED_KEY = "aabbccddeeff00112233445566778899"
+
+    async def fake_cloud(email, password):
+        assert email == "me@x.com" and password == "pw"
+        return [{"name": "Front", "mac": "AA:BB:CC:DD:EE:01",
+                 "network_key": FETCHED_KEY, "stations": 4}]
+
+    async def fake_catch(key, *, want_mac=None, **kw):
+        assert key == FETCHED_KEY                       # the fetched key is used to catch
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+
+    monkeypatch.setattr(O, "cloud_fetch", fake_cloud)
+    monkeypatch.setattr(O, "catch_device", fake_catch)
+    monkeypatch.setattr(getpass, "getpass", lambda *a, **k: "pw")
+    asyncio.run(cli.cmd_register("me@x.com", path=str(p), ask_prompt=False))
+
+    data = json.loads(p.read_text())
+    assert len(data["devices"]) == 1
+    d = data["devices"][0]
+    assert d["mac"] == "AA:BB:CC:DD:EE:01"
+    assert d["address"] == "UUID-NEW"
+    assert d["network_key"] == FETCHED_KEY             # fetched, not typed in
+
+
+def test_cli_register_cloud_multi_device_uses_chooser(tmp_path, monkeypatch):
+    """Several devices on the account + no --device-mac -> the chooser picks one."""
+    import getpass
+    import json
+    import cli
+    import onboarding as O
+    p = tmp_path / "config.json"
+
+    async def fake_cloud(email, password):
+        return [{"name": "Front", "mac": "AA:BB:CC:DD:EE:FF", "network_key": TEST_KEY, "stations": 4},
+                {"name": "Back", "mac": "AA:BB:CC:DD:EE:01", "network_key": TEST_KEY, "stations": 6}]
+
+    captured = {}
+
+    async def fake_catch(key, *, want_mac=None, **kw):
+        captured["want_mac"] = want_mac
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+
+    monkeypatch.setattr(O, "cloud_fetch", fake_cloud)
+    monkeypatch.setattr(O, "catch_device", fake_catch)
+    monkeypatch.setattr(getpass, "getpass", lambda *a, **k: "pw")
+    asyncio.run(cli.cmd_register("me@x.com", path=str(p), ask_prompt=False,
+                                 choose_fn=lambda _p: "1"))     # pick "Back"
+
+    assert captured["want_mac"] == "AA:BB:CC:DD:EE:01"          # chose device [1]
+    data = json.loads(p.read_text())
+    assert [d["name"] for d in data["devices"]] == ["Back"]
+    assert data["devices"][0]["stations"] == 6
+
+
+def test_cli_register_cloud_auth_error_surfaced(tmp_path, monkeypatch, capsys):
+    import getpass
+    import cli
+    import onboarding as O
+    p = tmp_path / "config.json"
+
+    async def bad_login(email, password):
+        raise O.AuthError("rejected (HTTP 401) — check email/password")
+
+    monkeypatch.setattr(O, "cloud_fetch", bad_login)
+    monkeypatch.setattr(getpass, "getpass", lambda *a, **k: "wrong")
+    asyncio.run(cli.cmd_register("me@x.com", path=str(p), ask_prompt=False))
+    out = capsys.readouterr().out.lower()
+    assert "login failed" in out or "401" in out
+    assert not p.exists()                                        # nothing written
 
 
 def test_cli_start_and_stop(monkeypatch, capsys):

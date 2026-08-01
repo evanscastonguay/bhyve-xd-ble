@@ -111,8 +111,20 @@ async def cmd_login(email=None, *, show_key=False):
           "key. Address resolution + config writing arrive in a later phase.)")
 
 
+def _choose_device(devices, choose_fn=input):
+    """Print a numbered list of account devices and return the chosen one (or None on
+    blank/invalid input). choose_fn is injectable so this stays testable."""
+    print("multiple devices on the account — choose one:")
+    for i, d in enumerate(devices):
+        print(f"  [{i}] {d.get('mac')}  {d.get('name')}")
+    raw = (choose_fn("device number (blank to cancel): ") or "").strip()
+    if not raw.isdigit() or not (0 <= int(raw) < len(devices)):
+        return None
+    return devices[int(raw)]
+
+
 async def cmd_register(email=None, *, name=None, want_mac=None, show_key=False,
-                       path="config.json", ask_prompt=True):
+                       path="config.json", ask_prompt=True, choose_fn=input):
     """Discover a NEW timer and save it to config.json — one command, no hand-editing.
 
     Key: reuse the account key already in config.json (adding another timer on the
@@ -131,9 +143,16 @@ async def cmd_register(email=None, *, name=None, want_mac=None, show_key=False,
     else:
         if not email:
             email = input("Orbit account email: ").strip()
+        print(f"no saved key at {path} — logging in to Orbit as {email}…")
         password = getpass.getpass("Orbit password (hidden): ")
         try:
             devices = await onboarding.cloud_fetch(email, password)
+        except onboarding.MFARequired as e:
+            print(f"cloud login needs multi-factor auth, which this flow can't complete: {e}")
+            return
+        except onboarding.AuthError as e:
+            print(f"cloud login failed — {e}")
+            return
         except onboarding.CloudError as e:
             print(f"cloud login failed: {e}")
             return
@@ -150,10 +169,10 @@ async def cmd_register(email=None, *, name=None, want_mac=None, show_key=False,
         elif len(controllable) == 1:
             chosen = controllable[0]
         else:
-            print("multiple devices on the account — re-run with --device-mac <MAC>:")
-            for d in controllable:
-                print(f"  {d.get('mac')}  {d.get('name')}")
-            return
+            chosen = _choose_device(controllable, choose_fn)
+            if chosen is None:
+                print("no device selected — nothing registered.")
+                return
         key, want_mac = chosen["network_key"], chosen.get("mac")
         stations = int(chosen.get("stations") or 4)
         name = name or chosen.get("name")
