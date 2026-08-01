@@ -114,8 +114,21 @@ python cli.py register you@example.com --name "Back Yard"
   `--device-mac <MAC>` to skip it).
 - After this first run the key is saved, so every later timer skips the cloud login.
 
-Requires prior Orbit-app setup: this reuses the account key the app provisioned onto the
-device — it does not enroll a factory-fresh device. See `PROJECT_STATUS.md` §5–6.
+### Enroll a factory-fresh device (app-free)
+
+`cli.py provision` enrolls a **factory-reset / brand-new** timer **without the Orbit app** —
+it writes the account key onto the device itself, then saves it:
+
+```bash
+python cli.py provision            # (or: python cli.py provision you@example.com)
+```
+
+Factory-reset the timer into **pairing mode** (dial to OFF, hold the dial ~10 s until the
+full display lights up), turn the **phone's Bluetooth OFF**, then run it. It writes the
+account key to the device's provisioning characteristic (`6c76`), verifies with a normal
+read-back, and saves `config.json`. The account key comes from your existing config or a
+one-time cloud login, same as `register`. (Mechanism reverse-engineered in
+`SPIKE_provisioning.md`.)
 
 > **The one precondition:** turn your **phone's Bluetooth OFF** before pressing Enter. A
 > B-Hyve accepts only one BLE connection and won't advertise while the phone holds it —
