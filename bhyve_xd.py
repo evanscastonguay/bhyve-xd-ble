@@ -291,10 +291,15 @@ class BHyveXD:
                    name=d.get("name", "B-Hyve XD"),
                    stations=int(d.get("stations", 4)))
 
-    def session(self, *, scan_timeout: float = 30.0, connect_attempts: int = 3):
+    def session(self, *, scan_timeout: float = 30.0, connect_attempts: int = 3, client=None):
         """Low-level: open a BLE session for manual arm()/command/read control.
-        connect_attempts=1 makes onboarding probes fail fast on the wrong device."""
-        return _Session(self, scan_timeout, connect_attempts)
+        connect_attempts=1 makes onboarding probes fail fast on the wrong device.
+
+        client: an ALREADY-CONNECTED BleakClient to adopt instead of scanning +
+        connecting. Used by the live-catch flow for a rotating-address timer: grab
+        the live advertisement, connect once, then hand that client here. Exiting
+        the session disconnects it, same as a self-opened connection."""
+        return _Session(self, scan_timeout, connect_attempts, client=client)
 
     # -- High-level one-shot operations ----------------------------------- #
     # Each opens its own connection, ARMS the device (required), performs the
@@ -329,33 +334,40 @@ class BHyveXD:
 
 
 class _Session:
-    def __init__(self, dev: BHyveXD, scan_timeout: float, connect_attempts: int = 3):
+    def __init__(self, dev: BHyveXD, scan_timeout: float, connect_attempts: int = 3, client=None):
         self._dev = dev
         self._scan_timeout = scan_timeout
         self._connect_attempts = connect_attempts
-        self._client: BleakClient | None = None
+        self._client: BleakClient | None = client   # non-None -> adopt (skip scan/connect)
         self._iv: bytes | None = None
         self._tx = 0
         self._rx = 0            # running device-reply counter
         self._notifs: list[bytes] = []
 
     async def __aenter__(self):
-        from bleak import BleakClient, BleakScanner
-        from bleak_retry_connector import establish_connection
-        d = self._dev
-        ble = await BleakScanner.find_device_by_address(d.address, timeout=self._scan_timeout)
-        if ble is None:
-            raise RuntimeError(f"{d.address} not found — is the timer awake (press its button)?")
-        self._client = await establish_connection(BleakClient, ble, d.address,
-                                                  max_attempts=self._connect_attempts)
+        # Connect ourselves, unless a caller adopted an already-connected client.
+        if self._client is None:
+            from bleak import BleakClient, BleakScanner
+            from bleak_retry_connector import establish_connection
+            d = self._dev
+            ble = await BleakScanner.find_device_by_address(d.address, timeout=self._scan_timeout)
+            if ble is None:
+                raise RuntimeError(f"{d.address} not found — is the timer awake (press its button)?")
+            self._client = await establish_connection(BleakClient, ble, d.address,
+                                                      max_attempts=self._connect_attempts)
         # Fast-reject: only B-Hyve timers expose the fe32 service. This stops the
-        # macOS onboarding scan from arming unrelated BLE devices it probes.
+        # macOS onboarding scan from arming unrelated BLE devices it probes, and
+        # guards an adopted client too.
         if not any("fe32" in s.uuid.lower() for s in self._client.services):
             await self._client.disconnect()
-            raise NotABHyveError(f"{d.address} is not a B-Hyve device (no fe32 service)")
+            raise NotABHyveError(f"{self._dev.address} is not a B-Hyve device (no fe32 service)")
         await self._client.start_notify(READ_CHAR, lambda _s, data: self._notifs.append(bytes(data)))
         await asyncio.sleep(0.5)
-        # AES handshake
+        await self._handshake()
+        return self
+
+    async def _handshake(self):
+        """AES handshake: exchange 20-byte blobs, derive IV + tx/rx counters."""
         init_tx = bytearray(os.urandom(20))
         init_tx[11] = 0x00
         init_tx = bytes(init_tx)
@@ -364,7 +376,6 @@ class _Session:
         self._iv = rx[:4] + init_tx[4:12]
         self._tx = struct.unpack("<I", init_tx[12:16])[0]
         self._rx = struct.unpack("<I", init_tx[16:20])[0]
-        return self
 
     async def __aexit__(self, *exc):
         if self._client is not None:
