@@ -175,6 +175,10 @@ class FakeClient:
         self.is_connected = True
         self.mtu_size = 515
 
+    async def connect(self):
+        self.is_connected = True
+        return True
+
     @property
     def services(self):
         uuid = READ_CHAR if self.timer is not None else "0000180f-0000-1000-8000-00805f9b34fb"
@@ -512,6 +516,73 @@ def test_resolve_macos_matches_by_mac(monkeypatch):
     with fake_ble(lambda addr: registry.get(addr)):
         got = asyncio.run(O.resolve_address(TEST_MAC, TEST_KEY, platform_name="macos"))
     assert got == "UUID-REAL"
+
+
+@contextlib.contextmanager
+def fake_catch_ble(adverts, resolver):
+    """Patch bleak for connect-on-detection: a fake BleakScanner emits `adverts`
+    (each (BLEDevice, adv)) to its detection callback on start(), and BleakClient(dev)
+    yields FakeClient(resolver(dev.address)). No find_device_by_address / rescan —
+    so a rotating address can't slip away between scan and connect."""
+    import bleak
+
+    class FakeScanner:
+        def __init__(self, detection_callback=None):
+            self._cb = detection_callback
+
+        async def start(self):
+            for dev, adv in adverts:
+                if self._cb:
+                    self._cb(dev, adv)
+
+        async def stop(self):
+            pass
+
+    orig_scanner, orig_client = bleak.BleakScanner, bleak.BleakClient
+    bleak.BleakScanner = FakeScanner
+    bleak.BleakClient = lambda dev: FakeClient(resolver(dev.address))
+    try:
+        yield
+    finally:
+        bleak.BleakScanner, bleak.BleakClient = orig_scanner, orig_client
+
+
+def _adv(address, name, rssi):
+    return (SimpleNamespace(address=address, name=name), SimpleNamespace(rssi=rssi))
+
+
+def test_catch_device_finds_bhyve_by_advertisement():
+    """A decoy (no fe32) is probed + rejected; the timer is caught by connecting to
+    its live advertisement, and its MAC is read back over BLE."""
+    import onboarding as O
+    timer = FakeTimer(mac=TEST_MAC)
+    adverts = [_adv("UUID-DECOY", "TV", -40), _adv("UUID-ROT-1", "ASR", -60)]
+    resolver = lambda a: {"UUID-ROT-1": timer}.get(a)   # decoy -> None (non-fe32)
+    with fake_catch_ble(adverts, resolver):
+        addr, mac, st = asyncio.run(O.catch_device(TEST_KEY, scan_timeout=2.0))
+    assert addr == "UUID-ROT-1"
+    assert mac == TEST_MAC
+    assert st.device_mac == TEST_MAC
+
+
+def test_catch_device_matches_wanted_mac_among_several():
+    """With want_mac set, a non-matching B-Hyve is skipped and the right one returned."""
+    import onboarding as O
+    other = FakeTimer(mac="AA:BB:CC:DD:EE:03")
+    want = FakeTimer(mac=TEST_MAC)
+    adverts = [_adv("UUID-OTHER", "ASR", -50), _adv("UUID-WANT", "ASR", -70)]
+    resolver = lambda a: {"UUID-OTHER": other, "UUID-WANT": want}.get(a)
+    with fake_catch_ble(adverts, resolver):
+        addr, mac, _st = asyncio.run(O.catch_device(TEST_KEY, want_mac=TEST_MAC, scan_timeout=2.0))
+    assert addr == "UUID-WANT" and mac == TEST_MAC
+
+
+def test_catch_device_times_out_when_no_bhyve():
+    import onboarding as O
+    adverts = [_adv("UUID-DECOY", "TV", -40)]
+    with fake_catch_ble(adverts, lambda _a: None):
+        with pytest.raises(O.ResolveError):
+            asyncio.run(O.catch_device(TEST_KEY, scan_timeout=0.3))
 
 
 def test_resolve_linux_returns_mac():
