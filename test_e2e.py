@@ -317,6 +317,40 @@ def test_device_mac_survives_counter_resync():
     assert st.device_mac == TEST_MAC
 
 
+def test_session_adopts_preconnected_client():
+    """A session can run the full protocol on an ALREADY-CONNECTED client, with no
+    scan and no establish_connection. This is the primitive the live-catch flow
+    needs for a rotating-address timer: we grab the live advertisement, connect
+    once, then hand that client to the session. Note there is deliberately NO
+    fake_ble patching here — if the session tried to scan/connect it would fail."""
+    t = FakeTimer()
+    client = FakeClient(t)                       # already "connected"
+    dev = make_device(t)
+
+    async def run():
+        async with dev.session(client=client) as s:
+            await s.arm()
+            return await s.read_status()
+
+    st = asyncio.run(run())
+    assert st.device_mac == TEST_MAC
+    assert st.is_watering is False
+    assert client.is_connected is False          # exiting the session releases the connection
+
+
+def test_adopted_session_rejects_non_bhyve():
+    """Adopting a connected client that is NOT a B-Hyve (no fe32) still fast-rejects."""
+    client = FakeClient(None)                    # None timer -> non-fe32 services
+    dev = make_device(FakeTimer())
+
+    async def run():
+        async with dev.session(client=client) as s:
+            return s
+
+    with pytest.raises(NotABHyveError):
+        asyncio.run(run())
+
+
 # --------------------------------------------------------------------------- #
 # REST API (FastAPI handlers) end-to-end over the fake device
 # --------------------------------------------------------------------------- #
