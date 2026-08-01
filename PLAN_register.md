@@ -74,7 +74,7 @@ tz_offset_sec?}` into the `devices` list.
   missing file handled; temp-rename leaves valid JSON.
 - **Proves:** persistence is safe and reproducible (success criterion 5).
 
-### Phase 3 — `cli.py register` end-to-end (offline)
+### Phase 3 — `cli.py register` end-to-end (offline)  ✅ DONE
 `register [email] [--name NAME] [--reuse-key] [--show-key]`:
 1. **Key:** if `config.json` already has an account key → reuse it (no cloud, no login).
    Else prompt creds → `cloud_fetch` → choose device (match caught MAC, else pick/prompt).
@@ -130,8 +130,13 @@ match among several, and a non-`fe32` decoy rejected / timeout raises `ResolveEr
 **Phase 2 done:** `onboarding.write_config()` — atomic (temp+rename), idempotent
 merge by MAC, refuses to clobber malformed JSON. 33 e2e + 55 offline green.
 
-**Next:** Phase 3 — `cli.py register` orchestration (reuse-key/no-cloud path, phone-off
-prompt, catch → write → verify).
+**Phase 3 done:** `cli.py register` — reuse-key/no-cloud path (+ cloud path with
+device pick), phone-off prompt, `catch_device` → `write_config` → confirm; failure
+reports guidance and writes nothing. `_parse_register` for arg parsing. 36 e2e + 55
+offline green.
+
+**Next:** Phase 4 — LIVE hardware gate (user-run): `cli.py register --name "..."` with
+phone Bluetooth OFF registers the real timer in <1 min.
 
 ## Notes
 - Reuse: the merged `session(client=...)` adopt path is the connection substrate;
