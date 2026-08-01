@@ -105,6 +105,11 @@ advertisement** → read its own MAC + status back → write `config.json` → c
 > handles units that use a rotating/private BLE address). Add `--device-mac <MAC>` to
 > target a specific unit when several are in range.
 
+**Or from the browser:** run the server (`uvicorn server:app`), open the web UI, and
+click **＋ Add timer** — a wizard runs the same flow (reuse the saved key or log in
+once, catch the timer, save it) with live status and error hints. Same phone-Bluetooth-OFF
+precondition.
+
 For hands-on debugging (repeated start/stop on one held connection, with a timestamped
 log), `bhyve_lab.py` offers an interactive menu built on the same discovery code.
 
