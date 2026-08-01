@@ -23,6 +23,7 @@
   .zlabel .dot.on{background:var(--on2);box-shadow:0 0 7px var(--on2)}
   input[type=number]{width:56px;background:#0d1117;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px}
   select{background:#0d1117;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px}
+  input[type=text],input[type=email],input[type=password]{background:#0d1117;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-size:13px}
   .min{color:var(--mut);font-size:12px}
   button{border:none;border-radius:7px;padding:8px 14px;font-weight:600;cursor:pointer;color:#fff;font-size:13px}
   button:active{transform:translateY(1px)} button:disabled{opacity:.5;cursor:wait}
@@ -44,10 +45,38 @@
   <h1>🚰 B-Hyve XD — Local Control</h1>
   <div class="sub">Direct Bluetooth · no cloud · no hub</div>
 
-  <div class="card" id="devcard" style="display:none;max-width:560px">
-    <label style="font-size:13px;color:var(--mut)">Timer:
-      <select id="device" onchange="onDeviceChange()"></select>
-    </label>
+  <div class="card" id="devcard" style="max-width:560px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <label id="devpick" style="font-size:13px;color:var(--mut);display:none">Timer:
+        <select id="device" onchange="onDeviceChange()"></select>
+      </label>
+      <button class="ghost" style="margin-left:auto" onclick="toggleOnboard()">＋ Add timer</button>
+    </div>
+
+    <div id="onboard" style="display:none;margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+      <div style="font-weight:600;margin-bottom:6px">Register a new timer</div>
+      <div class="hint" style="margin-top:0;margin-bottom:10px">
+        <b>Before you start:</b> turn your <b>phone's Bluetooth OFF</b> so it isn't holding
+        the timer, and keep the timer close to this computer. Then click Find &amp; Register.</div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:460px">
+        <label for="ob_name">Name</label>
+        <input id="ob_name" type="text" placeholder="e.g. Back Yard" style="width:100%">
+        <label for="ob_mac">MAC <span class="min">(optional)</span></label>
+        <input id="ob_mac" type="text" placeholder="44:67:55:… (only if several nearby)" style="width:100%">
+        <div id="ob_cloudfields" style="display:contents">
+          <label for="ob_email">Orbit email</label>
+          <input id="ob_email" type="email" placeholder="first timer only — fetches the key" style="width:100%">
+          <label for="ob_pw">Orbit password</label>
+          <input id="ob_pw" type="password" placeholder="never stored" style="width:100%">
+        </div>
+      </div>
+      <div id="ob_keyhint" class="hint" style="display:none">✓ Using the account key already saved — no login needed.</div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button class="bon" onclick="doRegister()">Find &amp; Register</button>
+        <button class="ghost" onclick="toggleOnboard()">Cancel</button>
+      </div>
+      <div id="ob_msg" class="hint" style="margin-top:10px"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -152,14 +181,65 @@ async function loadDevice(){
 }
 function onDeviceChange(){curDevice=$("#device").value; $("#log").innerHTML=""; loadDevice();}
 
+async function loadDevices(){
+  const devs=await api("GET","/api/devices");     // curDevice may be null -> no ?device
+  const sel=$("#device");
+  sel.innerHTML=devs.map(d=>`<option value="${d.index}">${d.name}</option>`).join("");
+  $("#devpick").style.display=devs.length>1?"inline":"none";
+  return devs;
+}
+
+// ---- onboarding wizard ----
+async function toggleOnboard(){
+  const el=$("#onboard"); const show=el.style.display==="none";
+  el.style.display=show?"block":"none"; $("#ob_msg").textContent="";
+  if(show){
+    try{const s=await api("GET","/api/onboard/state");
+      // With a saved account key, adding another timer needs no cloud login.
+      $("#ob_cloudfields").style.display=s.has_key?"none":"contents";
+      $("#ob_keyhint").style.display=s.has_key?"block":"none";
+    }catch(e){/* leave login fields visible on failure */}
+  }
+}
+
+async function doRegister(){
+  if(busy)return;
+  const body={
+    name:$("#ob_name").value.trim()||null,
+    device_mac:$("#ob_mac").value.trim()||null,
+    email:$("#ob_email").value.trim()||null,
+    password:$("#ob_pw").value||null,
+  };
+  const msg=$("#ob_msg"); msg.className="hint"; msg.textContent="";
+  setBusy(true,"searching for the timer… (turn phone Bluetooth OFF)");
+  log("→ register: searching (phone Bluetooth must be OFF)…");
+  try{
+    const r=await api("POST","/api/onboard/register",body);
+    const d=r.registered;
+    msg.innerHTML=`<span class="ok">✓ registered <b>${d.name}</b> — ${d.mac}</span>`;
+    log(`✓ registered ${d.name} (${d.mac}) at ${d.address}`,"ok");
+    const devs=await loadDevices();                       // refresh + select the new one
+    const added=devs.find(x=>x.name===d.name);
+    if(added){curDevice=String(added.index); $("#device").value=curDevice;}
+    $("#onboard").style.display="none";
+    $("#ob_pw").value="";                                 // don't leave the password in the field
+    $("#log").innerHTML=""; await loadDevice();
+  }catch(e){
+    msg.innerHTML=`<span class="err">✗ ${e.message}</span>`;
+    log("✗ register: "+e.message,"err");
+    if(/bluetooth/i.test(e.message))
+      msg.innerHTML+=`<br><span class="warn">Tip: make sure the phone's Bluetooth is OFF, then retry.</span>`;
+  }
+  setBusy(false);
+}
+
 async function init(){
   try{
-    const devs=await api("GET","/api/devices");     // curDevice still null -> no ?device
-    const sel=$("#device");
-    sel.innerHTML=devs.map(d=>`<option value="${d.index}">${d.name}</option>`).join("");
-    if(devs.length>1)$("#devcard").style.display="block";
+    const devs=await loadDevices();
     curDevice=devs.length?String(devs[0].index):null;
-    sel.value=curDevice;
+    if(curDevice!==null)$("#device").value=curDevice;
+    if(!devs.length){log("no timers configured yet — click “＋ Add timer” to register one.","warn");
+      buildValves(4); return;}
   }catch(e){log("device list failed: "+e.message,"warn");}   // fall back to server default
   await loadDevice();
 }
