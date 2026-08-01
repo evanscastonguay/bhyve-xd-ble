@@ -64,7 +64,11 @@ key is provisioned by the official app — Phase A assumes devices are **already
   409. Existing 55 offline + 41 e2e stay green.
 - **Proves:** the cloud-login-first path is correct + regression-proof, creds-independent.
 
-### Phase A2 — Live confirmation from empty config  ⛳ gate
+### Phase A2 — Live confirmation from empty config  ⛳ gate  ✅ PASSED (2026-08-01)
+Ran from an empty `/tmp/firstrun.json`: cloud login (real creds, no MFA) → fetched key
+→ caught the timer (MAC 44:67:55:D8:71:B0) → wrote config → status read back. Confirmed
+the fetched key was written, not reused. (Original problem statement below.)
+
 - With a **throwaway empty config** and phone Bluetooth OFF, run
   `cli.py register <email> --device-mac <MAC> --config <tmp>` (or the chooser), enter creds
   at the hidden prompt; confirm it logs in, catches, writes config, and a follow-up
@@ -73,7 +77,7 @@ key is provisioned by the official app — Phase A assumes devices are **already
   still stands (path proven by tests + a clear error explains why).
 - **Proves:** the real first-run works on hardware (success criterion A).
 
-### Phase A3 — Docs
+### Phase A3 — Docs  ✅ DONE
 - README "First run (cloud login)" section; note the two-device `--device-mac` need and
   the phone-off precondition. Update `PROJECT_STATUS.md` capabilities/first-run.
 - **Proves:** a new user can follow it unaided.
