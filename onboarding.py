@@ -25,8 +25,10 @@ the onboarding plan calls for.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import platform
+import time
 
 # Re-exported so onboarding is the single "setup entry point"; the implementation
 # lives in bhyve_xd (one source of truth) and is used to default the device clock.
@@ -288,3 +290,84 @@ async def _resolve_macos(mac: str, network_key: str, *, scan_timeout: float, max
     raise ResolveError(
         f"could not find timer {mac} nearby (checked {len(candidates)} candidate(s), "
         f"{tried} B-Hyve) — wake it (press/hold its button), keep it close to the Mac, and retry")
+
+
+# --------------------------------------------------------------------------- #
+# Connect-on-detection discovery — the robust registration primitive.
+# Unlike resolve_address's scan-then-connect (which can go stale against a
+# rotating/private address), this connects to the EXACT advertisement it just saw,
+# so it works for both stable and rotating addresses. Precondition: the phone must
+# not be holding the timer (its Bluetooth OFF) — then the timer advertises freely.
+# --------------------------------------------------------------------------- #
+async def catch_device(network_key_hex: str, *, want_mac: str | None = None,
+                       scan_timeout: float = 90.0, near_rssi: int = -80,
+                       tz_offset_sec: int | None = None) -> tuple[str, str, object]:
+    """Discover a B-Hyve timer by catching its live advertisement, then read its
+    own MAC + status back over BLE. Returns (address, device_mac, DeviceStatus).
+
+    On each newly-seen, close-enough advertisement we connect to THAT device,
+    fast-reject non-B-Hyve (no fe32), then arm + read status. Returns the device
+    whose MAC equals want_mac, or the first B-Hyve found if want_mac is None.
+    Raises ResolveError if none is caught within scan_timeout.
+    """
+    from bleak import BleakClient, BleakScanner
+
+    from bhyve_xd import BHyveXD
+
+    want = want_mac.upper() if want_mac else None
+    tz = tz_offset_sec if tz_offset_sec is not None else host_tz_offset()
+    seen: set[str] = set()
+    queue: asyncio.Queue = asyncio.Queue()
+    n_bhyve = 0
+
+    def _cb(dev, adv):
+        r = adv.rssi if getattr(adv, "rssi", None) is not None else -999
+        if dev.address in seen or r < near_rssi:
+            return
+        seen.add(dev.address)
+        queue.put_nowait(dev)
+
+    scanner = BleakScanner(detection_callback=_cb)
+    await scanner.start()
+    deadline = time.monotonic() + scan_timeout
+    try:
+        while time.monotonic() < deadline:
+            try:
+                remaining = max(0.05, deadline - time.monotonic())
+                dev = await asyncio.wait_for(queue.get(), timeout=min(remaining, 1.0))
+            except asyncio.TimeoutError:
+                continue
+            try:
+                client = BleakClient(dev)
+                await client.connect()
+            except Exception:
+                continue  # advert went stale / asleep / connect failed
+            if not any("fe32" in s.uuid.lower() for s in client.services):
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                continue  # not a B-Hyve
+            n_bhyve += 1
+            try:
+                dev_obj = BHyveXD(dev.address, network_key_hex, tz_offset_sec=tz)
+                async with dev_obj.session(client=client) as sess:
+                    await sess.arm()
+                    st = await sess.read_status()
+            except Exception:
+                continue  # armed the wrong thing / decode failed; try the next advert
+            if st is None or not st.device_mac:
+                continue
+            if want is None or st.device_mac.upper() == want:
+                return dev.address, st.device_mac, st
+            # a B-Hyve, but not the one we're looking for — keep scanning
+    finally:
+        try:
+            await scanner.stop()
+        except Exception:
+            pass
+    target = want_mac or "any B-Hyve"
+    raise ResolveError(
+        f"could not catch {target} within {scan_timeout:.0f}s (saw {len(seen)} device(s), "
+        f"{n_bhyve} B-Hyve) — is the phone's Bluetooth OFF so it isn't holding the timer? "
+        "keep the timer close to the Mac and retry")
