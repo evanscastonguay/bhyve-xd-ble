@@ -3,6 +3,12 @@
 _Investigation only. No device reset, no implementation, until the B0 decision below.
 Written 2026-08-01 from first principles + what this project already established._
 
+> **B0 DECISION (2026-08-01): NO-GO for now — accepted limitation.** We are not running
+> the capture at this time (no sacrificial factory reset). Factory-reset recovery is a
+> one-time re-add in the official Orbit app, after which our tooling works. The staged
+> plan (B1 capture → B2 analyze → B3 build) stands ready if app-free initial enrollment
+> becomes a real goal — re-open by starting at B1.
+
 ## Objective
 Decide whether we can enroll a **factory-fresh / factory-reset** B-Hyve XD **without the
 official Orbit app** — i.e., have our own tooling perform the **initial provisioning**
