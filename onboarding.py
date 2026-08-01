@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
+import os
 import platform
+import tempfile
 import time
 
 # Re-exported so onboarding is the single "setup entry point"; the implementation
@@ -290,6 +293,62 @@ async def _resolve_macos(mac: str, network_key: str, *, scan_timeout: float, max
     raise ResolveError(
         f"could not find timer {mac} nearby (checked {len(candidates)} candidate(s), "
         f"{tried} B-Hyve) — wake it (press/hold its button), keep it close to the Mac, and retry")
+
+
+# --------------------------------------------------------------------------- #
+# Config persistence — merge a resolved device into config.json. Idempotent
+# (dedupe/update by MAC) and atomic (temp file + rename), so re-registering a
+# drifted address updates in place and a crash never leaves a half-written config.
+# --------------------------------------------------------------------------- #
+def write_config(path: str, device: dict) -> dict:
+    """Merge `device` into the `devices` list of `path` and write it back atomically.
+
+    device: {name, address, network_key, mac, stations, tz_offset_sec?}. Matching is
+    by `mac` (case-insensitive), falling back to `address`; a match is updated in
+    place (preserving any extra fields already there), otherwise the device is
+    appended. Returns the full config dict written.
+
+    A missing/empty file starts a fresh config. A file that exists but is not valid
+    JSON raises ValueError and is left untouched (never clobbered).
+    """
+    config: dict = {"devices": []}
+    if os.path.exists(path):
+        text = open(path).read().strip()
+        if text:
+            try:
+                config = json.loads(text)
+            except json.JSONDecodeError as err:
+                raise ValueError(f"{path} is not valid JSON — refusing to overwrite") from err
+    devices = config.setdefault("devices", [])
+
+    want_mac = (device.get("mac") or "").upper()
+    idx = None
+    for i, d in enumerate(devices):
+        if want_mac and (d.get("mac") or "").upper() == want_mac:
+            idx = i
+            break
+        if not want_mac and d.get("address") and d.get("address") == device.get("address"):
+            idx = i
+            break
+    if idx is None:
+        devices.append(device)
+    else:
+        devices[idx] = {**devices[idx], **device}   # update, keep any extra existing fields
+
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".config.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(config, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)   # atomic on POSIX
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return config
 
 
 # --------------------------------------------------------------------------- #

@@ -65,7 +65,7 @@ scan_timeout=90, near_rssi=-80) -> (address, mac, DeviceStatus)`.
   decoy rejected; `want_mac` match among several; timeout → `ResolveError`.
 - **Proves:** robust discovery for stable AND rotating addresses, in product code.
 
-### Phase 2 — `write_config` (atomic, idempotent)
+### Phase 2 — `write_config` (atomic, idempotent)  ✅ DONE
 `onboarding.write_config(path, device)` merges `{name,address,network_key,mac,stations,
 tz_offset_sec?}` into the `devices` list.
 - Dedupe/update by `mac` (re-registering a drifted address updates in place, doesn't
@@ -127,7 +127,11 @@ rotating-address timer discovered by connect-on-detection + MAC read back, want_
 match among several, and a non-`fe32` decoy rejected / timeout raises `ResolveError`.
 28 e2e + 55 offline green.
 
-**Next:** Phase 2 — `onboarding.write_config()` (atomic, idempotent merge by MAC).
+**Phase 2 done:** `onboarding.write_config()` — atomic (temp+rename), idempotent
+merge by MAC, refuses to clobber malformed JSON. 33 e2e + 55 offline green.
+
+**Next:** Phase 3 — `cli.py register` orchestration (reuse-key/no-cloud path, phone-off
+prompt, catch → write → verify).
 
 ## Notes
 - Reuse: the merged `session(client=...)` adopt path is the connection substrate;
