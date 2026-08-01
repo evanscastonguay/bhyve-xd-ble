@@ -81,9 +81,10 @@ one.** Consequences of a factory reset:
 - The reset **wipes the device's account key and account association**. To our (correct)
   key the device now behaves like the **wrong-key column above** — connects, handshakes,
   nothing decodes, commands ignored.
-- We never reverse-engineered the **initial provisioning handshake** (how the app writes
-  the account key onto a fresh device) — that's the missing capability for app-free
-  onboarding.
+- The **initial provisioning handshake** is now **reverse-engineered** (2026-08-01 HCI
+  capture, `SPIKE_provisioning.md`): the app writes the account key as a **plaintext ATT
+  Write to characteristic `6c76` (handle `0x0019`)**, value `0x0100`‖key — no pairing/
+  encryption. So app-free enrollment is feasible (a single BLE write); not yet implemented.
 - **Recovery:** re-add the timer in the **official Orbit app**; it is re-provisioned with
   the **same** account key (account-scoped, unchanged), after which our existing
   `config.json` key works again and `cli.py register` re-discovers the (possibly new)
@@ -112,11 +113,9 @@ default. Multiple timers on one account share one account key.
 - Backup checkpoint tag: **`onboarding-complete-2026-08-01`** (pushed).
 
 ## 10. Known gaps / possible future work
-- **App-free factory-reset onboarding** — would require reverse-engineering the initial
-  provisioning handshake (BLE-sniff the app's first-time setup). Investigated in
-  `SPIKE_provisioning.md`; **decided NO-GO for now (2026-08-01)** — accepted limitation:
-  a factory reset recovers via a one-time re-add in the official app. Staged plan stands
-  ready if it becomes a goal.
+- **App-free factory-reset onboarding** — provisioning is now **understood** (write
+  `0x0100`‖key to char `6c76`; `SPIKE_provisioning.md`, B3 = GO). **Buildable, not yet
+  built**: a `provision_device()` + a captured-sequence fake for tests.
 - **Catch-once-and-hold resident server** (`PLAN_catch_and_hold.md`) — deferred; the
   stable UUID made it unnecessary for the current units.
 - **Linux/BlueZ headless host** — addresses by MAC (no rotating-UUID problem); the
