@@ -476,6 +476,67 @@ def test_cli_status_targets_selected_device(monkeypatch, capsys):
     assert seen["device"] == "New Timer"
 
 
+def test_cli_parse_register_args():
+    import cli
+    assert cli._parse_register([]) == (None, None, None, False)
+    assert cli._parse_register(["me@x.com"]) == ("me@x.com", None, None, False)
+    assert cli._parse_register(["--name", "New Timer", "--device-mac", "AA:BB"]) == \
+        (None, "New Timer", "AA:BB", False)
+    assert cli._parse_register(["me@x.com", "--name=Yard", "--show-key"]) == \
+        ("me@x.com", "Yard", None, True)
+
+
+def test_cli_register_reuses_key_without_cloud(tmp_path, monkeypatch, capsys):
+    """Registering a 2nd timer reuses the account key already in config — NO cloud
+    login — catches the device, and appends it with the reused key."""
+    import json
+    import cli
+    import onboarding as O
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"devices": [
+        {"name": "Old", "address": "UUID-OLD", "network_key": TEST_KEY,
+         "mac": "AA:BB:CC:DD:EE:FF", "stations": 4}]}))
+
+    async def fake_catch(key, *, want_mac=None, **kw):
+        assert key == TEST_KEY                     # the reused account key
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+
+    def no_cloud(*a, **k):
+        raise AssertionError("cloud_fetch must NOT be called when a key already exists")
+
+    monkeypatch.setattr(O, "catch_device", fake_catch)
+    monkeypatch.setattr(O, "cloud_fetch", no_cloud)
+    asyncio.run(cli.cmd_register(name="New Timer", path=str(p), ask_prompt=False))
+
+    data = json.loads(p.read_text())
+    assert [d["name"] for d in data["devices"]] == ["Old", "New Timer"]
+    new = data["devices"][1]
+    assert new["address"] == "UUID-NEW"
+    assert new["mac"] == "AA:BB:CC:DD:EE:01"
+    assert new["network_key"] == TEST_KEY          # reused, not re-fetched
+
+
+def test_cli_register_reports_catch_failure(tmp_path, monkeypatch, capsys):
+    """A failed catch is reported (with guidance) and nothing is written."""
+    import json
+    import cli
+    import onboarding as O
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"devices": [
+        {"name": "Old", "network_key": TEST_KEY, "mac": "AA:BB:CC:DD:EE:FF"}]}))
+
+    async def boom(key, *, want_mac=None, **kw):
+        raise O.ResolveError("nothing caught — phone Bluetooth OFF?")
+
+    monkeypatch.setattr(O, "catch_device", boom)
+    asyncio.run(cli.cmd_register(name="New Timer", path=str(p), ask_prompt=False))
+    out = capsys.readouterr().out
+    assert "failed" in out.lower()
+    # config untouched (still just the one device)
+    assert len(json.loads(p.read_text())["devices"]) == 1
+
+
 def test_cli_start_and_stop(monkeypatch, capsys):
     import cli
     t = FakeTimer()

@@ -14,6 +14,8 @@ reads status back for confirmation.
     python cli.py selftest            # autonomous set->read->start->read->stop->read
     python cli.py scan                # list nearby BLE devices (find the address)
     python cli.py login [email]       # cloud login -> print devices + keys (--dry-run)
+    python cli.py register [email]    # discover + save a NEW timer to config.json
+                                      #   --name NAME  --device-mac MAC  --show-key
 
 With multiple timers in config.json, pick one with --device (name or 0-based index);
 the default is the first device:
@@ -109,6 +111,98 @@ async def cmd_login(email=None, *, show_key=False):
           "key. Address resolution + config writing arrive in a later phase.)")
 
 
+async def cmd_register(email=None, *, name=None, want_mac=None, show_key=False,
+                       path="config.json", ask_prompt=True):
+    """Discover a NEW timer and save it to config.json — one command, no hand-editing.
+
+    Key: reuse the account key already in config.json (adding another timer on the
+    same account needs NO cloud login); only log in when there's no key yet (or an
+    email is given). Then: prompt to release the phone -> catch the timer's live
+    advertisement -> read its MAC + status back -> write config -> confirm.
+    """
+    import getpass
+
+    import onboarding
+
+    key = None if email else onboarding.key_from_existing_config(path)
+    stations = 4
+    if key:
+        print(f"reusing the account key from {path} (...{key[-4:]}) — no cloud login needed.")
+    else:
+        if not email:
+            email = input("Orbit account email: ").strip()
+        password = getpass.getpass("Orbit password (hidden): ")
+        try:
+            devices = await onboarding.cloud_fetch(email, password)
+        except onboarding.CloudError as e:
+            print(f"cloud login failed: {e}")
+            return
+        controllable = [d for d in devices if d.get("network_key")]
+        if not controllable:
+            print("no controllable devices with a BLE key on this account.")
+            return
+        if want_mac:
+            chosen = next((d for d in controllable
+                           if (d.get("mac") or "").upper() == want_mac.upper()), None)
+            if not chosen:
+                print(f"no device with MAC {want_mac} on the account.")
+                return
+        elif len(controllable) == 1:
+            chosen = controllable[0]
+        else:
+            print("multiple devices on the account — re-run with --device-mac <MAC>:")
+            for d in controllable:
+                print(f"  {d.get('mac')}  {d.get('name')}")
+            return
+        key, want_mac = chosen["network_key"], chosen.get("mac")
+        stations = int(chosen.get("stations") or 4)
+        name = name or chosen.get("name")
+
+    if ask_prompt:
+        input("\nTurn your phone's Bluetooth OFF so it isn't holding the timer, keep the "
+              "timer close to the Mac, then press Enter to search... ")
+    try:
+        address, mac, st = await onboarding.catch_device(key, want_mac=want_mac)
+    except onboarding.ResolveError as e:
+        print(f"\nregister failed: {e}")
+        return
+
+    device = {"name": name or "B-Hyve XD", "address": address,
+              "network_key": key, "mac": mac, "stations": stations}
+    onboarding.write_config(path, device)
+    keyview = key if show_key else f"****{key[-4:]}"
+    print(f"\n✓ registered '{device['name']}'  mac={mac}  address={address}  key={keyview}")
+    print(f"  status: clock={st.clock_str}  watering={st.is_watering}")
+    print(f"  saved to {path}. Control it with:  cli.py status --device \"{device['name']}\"")
+
+
+def _parse_register(args):
+    """Parse register args: optional email positional + --name/--device-mac/--show-key.
+    Returns (email, name, want_mac, show_key)."""
+    email = name = want = None
+    show = False
+    i = 0
+    while i < len(args):
+        x = args[i]
+        if x == "--name":
+            name = args[i + 1] if i + 1 < len(args) else None; i += 2
+        elif x.startswith("--name="):
+            name = x.split("=", 1)[1]; i += 1
+        elif x == "--device-mac":
+            want = args[i + 1] if i + 1 < len(args) else None; i += 2
+        elif x.startswith("--device-mac="):
+            want = x.split("=", 1)[1]; i += 1
+        elif x == "--show-key":
+            show = True; i += 1
+        elif x.startswith("--"):
+            i += 1
+        else:
+            if email is None:
+                email = x
+            i += 1
+    return email, name, want, show
+
+
 async def cmd_scan():
     from bleak import BleakScanner
     print("scanning 12s...")
@@ -160,6 +254,9 @@ def main():
         show_key = "--show-key" in rest
         pos = [x for x in rest if not x.startswith("--")]   # --dry-run is the default
         asyncio.run(cmd_login(pos[0] if pos else None, show_key=show_key))
+    elif cmd == "register":
+        email, name, want_mac, show_key = _parse_register(a[1:])
+        asyncio.run(cmd_register(email, name=name, want_mac=want_mac, show_key=show_key))
     else:
         print(__doc__)
 

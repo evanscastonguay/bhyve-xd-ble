@@ -300,6 +300,22 @@ async def _resolve_macos(mac: str, network_key: str, *, scan_timeout: float, max
 # (dedupe/update by MAC) and atomic (temp file + rename), so re-registering a
 # drifted address updates in place and a crash never leaves a half-written config.
 # --------------------------------------------------------------------------- #
+def key_from_existing_config(path: str) -> str | None:
+    """Return the account network key already stored in config.json (from the first
+    device that has one), or None. The key is account-scoped, so registering another
+    timer on the same account can reuse it — no cloud login needed."""
+    if not os.path.exists(path):
+        return None
+    try:
+        devices = json.load(open(path)).get("devices", [])
+    except (json.JSONDecodeError, OSError, AttributeError):
+        return None
+    for d in devices:
+        if isinstance(d, dict) and d.get("network_key"):
+            return d["network_key"]
+    return None
+
+
 def write_config(path: str, device: dict) -> dict:
     """Merge `device` into the `devices` list of `path` and write it back atomically.
 
