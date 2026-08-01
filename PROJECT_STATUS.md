@@ -113,8 +113,10 @@ default. Multiple timers on one account share one account key.
 
 ## 10. Known gaps / possible future work
 - **App-free factory-reset onboarding** — would require reverse-engineering the initial
-  provisioning handshake (BLE-sniff the app's first-time setup). Substantial; only worth
-  it if enrolling without the app is a real goal.
+  provisioning handshake (BLE-sniff the app's first-time setup). Investigated in
+  `SPIKE_provisioning.md`; **decided NO-GO for now (2026-08-01)** — accepted limitation:
+  a factory reset recovers via a one-time re-add in the official app. Staged plan stands
+  ready if it becomes a goal.
 - **Catch-once-and-hold resident server** (`PLAN_catch_and_hold.md`) — deferred; the
   stable UUID made it unnecessary for the current units.
 - **Linux/BlueZ headless host** — addresses by MAC (no rotating-UUID problem); the
