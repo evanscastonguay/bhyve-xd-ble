@@ -374,16 +374,20 @@ def write_config(path: str, device: dict) -> dict:
 # so it works for both stable and rotating addresses. Precondition: the phone must
 # not be holding the timer (its Bluetooth OFF) — then the timer advertises freely.
 # --------------------------------------------------------------------------- #
-async def catch_device(network_key_hex: str, *, want_mac: str | None = None,
-                       scan_timeout: float = 90.0, near_rssi: int = -80,
-                       tz_offset_sec: int | None = None) -> tuple[str, str, object]:
-    """Discover a B-Hyve timer by catching its live advertisement, then read its
-    own MAC + status back over BLE. Returns (address, device_mac, DeviceStatus).
+async def catch_device_session(network_key_hex: str, *, want_mac: str | None = None,
+                               scan_timeout: float = 90.0, near_rssi: int = -80,
+                               tz_offset_sec: int | None = None) -> tuple[str, str, object, object]:
+    """Catch a B-Hyve by its live advertisement and return an OPEN, armed session:
+    (address, device_mac, DeviceStatus, session).
 
-    On each newly-seen, close-enough advertisement we connect to THAT device,
-    fast-reject non-B-Hyve (no fe32), then arm + read status. Returns the device
-    whose MAC equals want_mac, or the first B-Hyve found if want_mac is None.
-    Raises ResolveError if none is caught within scan_timeout.
+    On each newly-seen, close-enough advertisement we connect to THAT device (robust
+    to rotating addresses — no rescan), fast-reject non-B-Hyve (no fe32), adopt a
+    session, arm, and read status. Returns the device whose MAC equals want_mac, or
+    the first B-Hyve if want_mac is None. Raises ResolveError on timeout.
+
+    The caller OWNS the returned session and MUST close it when done:
+    `await session.__aexit__(None, None, None)`. Use catch_device() for a one-shot
+    read that connects and disconnects for you.
     """
     from bleak import BleakClient, BleakScanner
 
@@ -424,18 +428,20 @@ async def catch_device(network_key_hex: str, *, want_mac: str | None = None,
                     pass
                 continue  # not a B-Hyve
             n_bhyve += 1
+            sess = BHyveXD(dev.address, network_key_hex, tz_offset_sec=tz).session(client=client)
             try:
-                dev_obj = BHyveXD(dev.address, network_key_hex, tz_offset_sec=tz)
-                async with dev_obj.session(client=client) as sess:
-                    await sess.arm()
-                    st = await sess.read_status()
+                await sess.__aenter__()
+                await sess.arm()
+                st = await sess.read_status()
             except Exception:
+                try:
+                    await sess.__aexit__(None, None, None)
+                except Exception:
+                    pass
                 continue  # armed the wrong thing / decode failed; try the next advert
-            if st is None or not st.device_mac:
-                continue
-            if want is None or st.device_mac.upper() == want:
-                return dev.address, st.device_mac, st
-            # a B-Hyve, but not the one we're looking for — keep scanning
+            if st is not None and st.device_mac and (want is None or st.device_mac.upper() == want):
+                return dev.address, st.device_mac, st, sess   # OPEN — caller closes
+            await sess.__aexit__(None, None, None)   # a B-Hyve, but not the one — keep scanning
     finally:
         try:
             await scanner.stop()
@@ -446,3 +452,17 @@ async def catch_device(network_key_hex: str, *, want_mac: str | None = None,
         f"could not catch {target} within {scan_timeout:.0f}s (saw {len(seen)} device(s), "
         f"{n_bhyve} B-Hyve) — is the phone's Bluetooth OFF so it isn't holding the timer? "
         "keep the timer close to the Mac and retry")
+
+
+async def catch_device(network_key_hex: str, *, want_mac: str | None = None,
+                       scan_timeout: float = 90.0, near_rssi: int = -80,
+                       tz_offset_sec: int | None = None) -> tuple[str, str, object]:
+    """One-shot discovery: catch a B-Hyve, read its MAC + status, and disconnect.
+    Returns (address, device_mac, DeviceStatus). Built on catch_device_session (which
+    keeps the connection open for callers that need it). Raises ResolveError on timeout.
+    """
+    address, mac, st, sess = await catch_device_session(
+        network_key_hex, want_mac=want_mac, scan_timeout=scan_timeout,
+        near_rssi=near_rssi, tz_offset_sec=tz_offset_sec)
+    await sess.__aexit__(None, None, None)
+    return address, mac, st

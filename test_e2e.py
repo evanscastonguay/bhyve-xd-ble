@@ -638,6 +638,27 @@ def test_catch_device_matches_wanted_mac_among_several():
     assert addr == "UUID-WANT" and mac == TEST_MAC
 
 
+def test_catch_device_session_stays_open_for_live_control():
+    """catch_device_session returns an OPEN, armed session so a caller (e.g. bhyve_lab)
+    can issue several commands on the one caught connection, then close it."""
+    import onboarding as O
+    timer = FakeTimer(mac=TEST_MAC)
+    adverts = [_adv("UUID-ROT-1", "ASR", -60)]
+    resolver = lambda a: {"UUID-ROT-1": timer}.get(a)
+
+    async def run():
+        addr, mac, _st, sess = await O.catch_device_session(TEST_KEY, scan_timeout=2.0)
+        await sess.start_zone(1, 60)          # session still open -> command works
+        st2 = await sess.read_status()
+        await sess.__aexit__(None, None, None)
+        return addr, mac, st2
+
+    with fake_catch_ble(adverts, resolver):
+        addr, mac, st2 = asyncio.run(run())
+    assert addr == "UUID-ROT-1" and mac == TEST_MAC
+    assert st2.is_watering is True and timer.watering is True
+
+
 def test_catch_device_times_out_when_no_bhyve():
     import onboarding as O
     adverts = [_adv("UUID-DECOY", "TV", -40)]
