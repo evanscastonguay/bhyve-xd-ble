@@ -1,5 +1,10 @@
 # Plan — Simple, robust device registration (`cli.py register`)
 
+> **STATUS: COMPLETE.** All 5 phases done + Phase 4 live gate PASSED on real hardware
+> (registered the new timer in one command, phone off, <1 min, key reused, no cloud).
+> `cli.py register` is the onboarding path. Deferred: web onboarding wizard (Solution 3).
+
+
 **Problem (`/s3-define`):** registering a new timer is a fragile, manual, multi-tool
 ritual (blind phone-release timing + hand-editing `config.json`). We want **one
 command** that takes a timer from unknown → controllable in <1 min, ≤3 guided steps.
@@ -93,7 +98,7 @@ known unit into a throwaway config) and confirm: caught, MAC-confirmed, written,
 read back — in <1 min, ≤3 manual actions.
 - **Proves:** the real UX target (success criteria 1–3, 7). Do not claim done until green.
 
-### Phase 5 — Cleanup & docs
+### Phase 5 — Cleanup & docs  ✅ DONE
 - README "Register a new timer" (phone-off precondition front and centre).
 - Slim `bhyve_lab.py` to call `catch_device` (kill duplicated crypto/framing) or mark it
   purely diagnostic. Full offline + e2e suites green. Commit + push per phase.

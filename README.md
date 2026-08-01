@@ -74,7 +74,39 @@ python cli.py start 1 300       # start zone 1 for 300s (confirms watering)
 python cli.py stop              # stop all zones (confirms idle)
 python cli.py selftest          # autonomous: set clock -> read -> start -> read -> stop -> read
 python cli.py scan              # list BLE devices (find the address)
+python cli.py register          # discover + save a NEW timer to config.json (see below)
 ```
+
+With several timers in `config.json`, target one with `--device <name|index>` (default
+= the first device):
+
+```bash
+python cli.py status --device "New Timer"
+python cli.py start 1 300 --device 1
+```
+
+## Register a new timer
+
+`cli.py register` turns a new timer into a working `config.json` entry in one command —
+no hand-editing, no hand-copying keys or addresses:
+
+```bash
+python cli.py register --name "Back Yard"
+```
+
+What it does: reuse the account **network key already in `config.json`** (so adding
+another timer on the same account needs **no cloud login**; the very first device logs
+in once to fetch the key) → prompt you to release the phone → **catch the timer's live
+advertisement** → read its own MAC + status back → write `config.json` → confirm.
+
+> **The one precondition:** turn your **phone's Bluetooth OFF** before pressing Enter. A
+> B-Hyve accepts only one BLE connection and won't advertise while the phone holds it —
+> with the phone released, the timer advertises freely and is caught reliably (this also
+> handles units that use a rotating/private BLE address). Add `--device-mac <MAC>` to
+> target a specific unit when several are in range.
+
+For hands-on debugging (repeated start/stop on one held connection, with a timestamped
+log), `bhyve_lab.py` offers an interactive menu built on the same discovery code.
 
 Library use:
 
@@ -96,7 +128,7 @@ Two layers, both hardware-free and repeatable:
 ```bash
 python selftest_offline.py                       # 55 offline byte/logic checks
 pip install -r requirements-dev.txt
-python -m pytest test_e2e.py -q                  # 19 end-to-end tests (~0.2s)
+python -m pytest test_e2e.py -q                  # 37 end-to-end tests (~0.6s)
 ```
 
 `test_e2e.py` runs every operation against a **fake B-Hyve** (`FakeTimer`) that
@@ -129,7 +161,8 @@ the single serializer. Change the protocol once, in one place.
 | `cli.py` | thin CLI over `bhyve_xd` |
 | `server.py` | thin FastAPI REST API over `bhyve_xd` |
 | `index.html` | web UI (calls the REST API) |
-| `onboarding.py` | one-time cloud login (`cloud_fetch`) + macOS address resolution (`resolve_address`) |
+| `onboarding.py` | cloud login (`cloud_fetch`), discovery (`catch_device`), and config write (`write_config`) — powers `cli.py register` |
+| `bhyve_lab.py` | interactive live-control diagnostic (reuses `onboarding.catch_device_session`) |
 | `selftest_offline.py` | offline byte checks (no device) — validates message builders |
 | `test_e2e.py` | end-to-end tests against a fake device (no hardware) — every operation |
 | `config.example.json` | copy to `config.json`, fill in address + network key |
