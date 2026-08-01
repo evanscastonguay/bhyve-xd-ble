@@ -396,6 +396,78 @@ def test_api_status_selects_device(monkeypatch):
     assert seen["device"] == "New Timer"
 
 
+def test_api_onboard_state_reports_saved_key(monkeypatch, tmp_path):
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [{"name": "A", "network_key": TEST_KEY}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    assert asyncio.run(server.onboard_state())["has_key"] is True
+    cfg.write_text(json.dumps({"devices": []}))
+    assert asyncio.run(server.onboard_state())["has_key"] is False
+
+
+def test_api_onboard_register_reuses_key(monkeypatch, tmp_path):
+    """The web register endpoint reuses the saved key (no cloud), catches the timer,
+    writes config, and does NOT leak the key back to the browser."""
+    import json
+    import server
+    import onboarding as O
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [
+        {"name": "Old", "address": "OLD", "network_key": TEST_KEY,
+         "mac": "44:67:55:D8:7A:B9", "stations": 4}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+
+    async def fake_catch(key, *, want_mac=None, **kw):
+        assert key == TEST_KEY
+        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
+        return "UUID-NEW", "44:67:55:D8:71:B0", st
+
+    def no_cloud(*a, **k):
+        raise AssertionError("cloud_fetch must not be called when a key exists")
+
+    monkeypatch.setattr(O, "catch_device", fake_catch)
+    monkeypatch.setattr(O, "cloud_fetch", no_cloud)
+    res = asyncio.run(server.onboard_register(server.OnboardBody(name="New Timer")))
+    assert res["registered"]["mac"] == "44:67:55:D8:71:B0"
+    assert "network_key" not in res["registered"]          # key never leaves the server
+    data = json.loads(cfg.read_text())
+    assert [d["name"] for d in data["devices"]] == ["Old", "New Timer"]
+    assert data["devices"][1]["network_key"] == TEST_KEY   # reused, written
+
+
+def test_api_onboard_register_maps_catch_failure_to_504(monkeypatch, tmp_path):
+    import json
+    from fastapi import HTTPException
+    import server
+    import onboarding as O
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [{"name": "Old", "network_key": TEST_KEY}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+
+    async def boom(key, *, want_mac=None, **kw):
+        raise O.ResolveError("nothing caught — phone Bluetooth OFF?")
+
+    monkeypatch.setattr(O, "catch_device", boom)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.onboard_register(server.OnboardBody(name="New Timer")))
+    assert exc.value.status_code == 504
+    assert len(json.loads(cfg.read_text())["devices"]) == 1   # nothing written
+
+
+def test_api_onboard_register_needs_creds_without_saved_key(monkeypatch, tmp_path):
+    import json
+    from fastapi import HTTPException
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": []}))          # no key yet
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.onboard_register(server.OnboardBody(name="First")))
+    assert exc.value.status_code == 400
+
+
 def test_api_status(monkeypatch):
     t = FakeTimer()
     server = _patch_server_device(monkeypatch, t)

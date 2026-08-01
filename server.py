@@ -58,6 +58,14 @@ class StartBody(BaseModel):
     minutes: float = Field(default=5, gt=0, le=120, description="run time in minutes")
 
 
+class OnboardBody(BaseModel):
+    name: str | None = Field(default=None, description="friendly name for the new timer")
+    device_mac: str | None = Field(default=None, description="target a specific unit by MAC")
+    email: str | None = Field(default=None, description="Orbit email (only if no saved key yet)")
+    password: str | None = Field(default=None, description="Orbit password (never stored)")
+    scan_timeout: float = Field(default=60, gt=0, le=180, description="seconds to wait for the timer")
+
+
 @app.get("/")
 async def index():
     return FileResponse(INDEX)
@@ -71,6 +79,70 @@ async def devices():
         devs = json.load(f)["devices"]
     return [{"index": i, "name": d.get("name", "B-Hyve XD"),
              "stations": int(d.get("stations", 4))} for i, d in enumerate(devs)]
+
+
+@app.get("/api/onboard/state")
+async def onboard_state():
+    """Tell the UI whether a saved account key exists — if so, adding another timer
+    needs no cloud login (the common case), so the wizard can hide the login fields."""
+    import onboarding
+    return {"has_key": onboarding.key_from_existing_config(CONFIG) is not None}
+
+
+@app.post("/api/onboard/register")
+async def onboard_register(body: OnboardBody):
+    """Register a NEW timer: reuse the saved account key (or log in once if there's
+    none / an email is given), catch the timer's live advertisement, read its MAC +
+    status back, and write config.json. The network key is never returned to the client.
+
+    Precondition (surfaced by the UI): the phone's Bluetooth must be OFF so it isn't
+    holding the timer. Serialized with the BLE lock like every other radio operation.
+    """
+    import onboarding
+
+    key = None if body.email else onboarding.key_from_existing_config(CONFIG)
+    stations, name, want_mac = 4, body.name, body.device_mac
+    if not key:
+        if not body.email or not body.password:
+            raise HTTPException(400, "no saved key yet — Orbit email + password required")
+        try:
+            devices = await onboarding.cloud_fetch(body.email, body.password)
+        except onboarding.AuthError as e:
+            raise HTTPException(401, str(e)) from e
+        except onboarding.RateLimited as e:
+            raise HTTPException(429, str(e)) from e
+        except onboarding.CloudError as e:
+            raise HTTPException(502, str(e)) from e
+        controllable = [d for d in devices if d.get("network_key")]
+        if not controllable:
+            raise HTTPException(404, "no controllable devices with a BLE key on this account")
+        if want_mac:
+            chosen = next((d for d in controllable
+                           if (d.get("mac") or "").upper() == want_mac.upper()), None)
+            if not chosen:
+                raise HTTPException(404, f"no device with MAC {want_mac} on the account")
+        elif len(controllable) == 1:
+            chosen = controllable[0]
+        else:
+            raise HTTPException(409, {"message": "multiple devices — choose one via device_mac",
+                                      "devices": [{"mac": d.get("mac"), "name": d.get("name")}
+                                                  for d in controllable]})
+        key, want_mac = chosen["network_key"], chosen.get("mac")
+        stations = int(chosen.get("stations") or 4)
+        name = name or chosen.get("name")
+
+    async with _ble_lock:
+        try:
+            address, mac, st = await onboarding.catch_device(
+                key, want_mac=want_mac, scan_timeout=body.scan_timeout)
+        except onboarding.ResolveError as e:
+            raise HTTPException(504, str(e)) from e
+
+    device = {"name": name or "B-Hyve XD", "address": address,
+              "network_key": key, "mac": mac, "stations": stations}
+    onboarding.write_config(CONFIG, device)
+    return {"registered": {"name": device["name"], "address": address, "mac": mac,
+                           "stations": stations}, "status": st.to_dict()}
 
 
 @app.get("/api/health")

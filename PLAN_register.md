@@ -2,7 +2,9 @@
 
 > **STATUS: COMPLETE.** All 5 phases done + Phase 4 live gate PASSED on real hardware
 > (registered the new timer in one command, phone off, <1 min, key reused, no cloud).
-> `cli.py register` is the onboarding path. Deferred: web onboarding wizard (Solution 3).
+> `cli.py register` is the CLI onboarding path. The web onboarding wizard (Solution 3)
+> is now also built — `POST /api/onboard/register` + a "＋ Add timer" flow in the web UI,
+> reusing `catch_device` — and is live-verified against real hardware.
 
 
 **Problem (`/s3-define`):** registering a new timer is a fragile, manual, multi-tool
