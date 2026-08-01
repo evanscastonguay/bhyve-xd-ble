@@ -356,8 +356,40 @@ def test_adopted_session_rejects_non_bhyve():
 # --------------------------------------------------------------------------- #
 def _patch_server_device(monkeypatch, timer):
     import server
-    monkeypatch.setattr(server, "_device", lambda: make_device(timer))
+    monkeypatch.setattr(server, "_device", lambda *a, **k: make_device(timer))
     return server
+
+
+def test_api_lists_devices(monkeypatch, tmp_path):
+    """GET /api/devices returns each configured device's index/name/stations."""
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [
+        {"name": "Old", "address": "A", "network_key": TEST_KEY, "stations": 4},
+        {"name": "New Timer", "address": "B", "network_key": TEST_KEY, "stations": 6},
+    ]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    got = asyncio.run(server.devices())
+    assert got == [
+        {"index": 0, "name": "Old", "stations": 4},
+        {"index": 1, "name": "New Timer", "stations": 6},
+    ]
+
+
+def test_api_status_selects_device(monkeypatch):
+    """A ?device= selection is forwarded to from_config for the BLE call."""
+    import server
+    seen = {}
+
+    def fake_from_config(cls, path=None, device=None):
+        seen["device"] = device
+        return make_device(FakeTimer())
+
+    monkeypatch.setattr(server.BHyveXD, "from_config", classmethod(fake_from_config))
+    with one_device(FakeTimer()):
+        asyncio.run(server.status(device="New Timer"))
+    assert seen["device"] == "New Timer"
 
 
 def test_api_status(monkeypatch):
@@ -414,6 +446,32 @@ def test_api_ble_error_becomes_503(monkeypatch):
 # --------------------------------------------------------------------------- #
 # CLI end-to-end over the fake device
 # --------------------------------------------------------------------------- #
+def test_cli_extract_device_selection():
+    """--device is pulled out of argv (name or numeric index) and the rest of the
+    args are left intact for the command dispatcher."""
+    import cli
+    assert cli._extract_device(["status"]) == (None, ["status"])
+    assert cli._extract_device(["status", "--device", "New Timer"]) == ("New Timer", ["status"])
+    assert cli._extract_device(["--device=2", "start", "1", "300"]) == (2, ["start", "1", "300"])
+    assert cli._extract_device(["stop", "--device", "0"]) == (0, ["stop"])
+
+
+def test_cli_status_targets_selected_device(monkeypatch, capsys):
+    """cmd_status(device=...) forwards the selection to from_config."""
+    import cli
+    seen = {}
+
+    def fake_from_config(cls, path="config.json", device=None):
+        seen["device"] = device
+        return make_device(FakeTimer())
+
+    monkeypatch.setattr(cli.BHyveXD, "from_config", classmethod(fake_from_config))
+    t = FakeTimer()
+    with one_device(t):
+        asyncio.run(cli.cmd_status(device="New Timer"))
+    assert seen["device"] == "New Timer"
+
+
 def test_cli_start_and_stop(monkeypatch, capsys):
     import cli
     t = FakeTimer()
