@@ -3,11 +3,32 @@
 _Investigation only. No device reset, no implementation, until the B0 decision below.
 Written 2026-08-01 from first principles + what this project already established._
 
-> **B0 DECISION (2026-08-01): NO-GO for now — accepted limitation.** We are not running
-> the capture at this time (no sacrificial factory reset). Factory-reset recovery is a
-> one-time re-add in the official Orbit app, after which our tooling works. The staged
-> plan (B1 capture → B2 analyze → B3 build) stands ready if app-free initial enrollment
-> becomes a real goal — re-open by starting at B1.
+> **RESOLVED 2026-08-01 — B1 capture done → B2 analysed → B3 = GO (feasible, simple).**
+> A live HCI capture (PacketLogger) of the official app enrolling a factory-reset device
+> showed provisioning is **hypothesis H1**: a single **plaintext ATT Write Request** of the
+> **account network key** to a dedicated characteristic — **no pairing, no encryption, no
+> cloud challenge**. See "B1/B2 findings" below. (Supersedes any earlier NO-GO.)
+
+## B1/B2 findings — how enrollment actually works
+Captured `capture.pklg` (git-ignored; contains the key — delete after). On the fresh
+device the app did, in order:
+1. Discover GATT. The **`fe32` service spans handles `0x0010–0x0019`** with characteristics:
+   `6c71` (val `0x0012`, AES handshake), `6c72` (val `0x0014`, write), `6c73` (val `0x0016`,
+   notify), and a **new one: `6c76` (val `0x0019`, props `Write`)** — the provisioning char.
+2. **Write the key:** `ATT Write Request` to **`6c76` (handle `0x0019`)** with value
+   **`0x0100` ‖ `<16-byte account network key>`** (18 bytes total). This is the whole
+   "provisioning" — plaintext, unauthenticated.
+3. Then the **normal session** we already implement: AES handshake on `6c71`, framed
+   `0x11…` commands on `6c72`, notifications on `6c73`.
+
+**Security check:** `0` SMP (pairing) packets and `0` HCI Encryption-Change events before
+the key write → the link is **unencrypted/unpaired**; `6c76` accepts a plain write. HCI is
+below the air-encryption layer anyway, so the key was visible in the clear regardless.
+
+**Conclusion:** app-free enrollment = *connect to the pairing-mode device → one write to
+`6c76` (`0x0100`+key) → verify with our normal handshake/read-back*. No sniffer or app
+needed once implemented. The account key itself still comes from the cloud/`config.json`
+(account-scoped); local control needs only the on-device key write, not cloud registration.
 
 ## Objective
 Decide whether we can enroll a **factory-fresh / factory-reset** B-Hyve XD **without the
