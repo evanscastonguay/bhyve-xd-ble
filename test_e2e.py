@@ -37,6 +37,7 @@ _MAC_BYTES = bytes.fromhex("446755d87ab9")
 READ_CHAR = "00006c73-fe32-4f58-8b78-98e42b2c047f"
 WRITE_CHAR = "00006c72-fe32-4f58-8b78-98e42b2c047f"
 AES_CHAR = "00006c71-fe32-4f58-8b78-98e42b2c047f"
+PROVISION_CHAR = "00006c76-fe32-4f58-8b78-98e42b2c047f"   # key-write char (from Phase B capture)
 
 
 @pytest.fixture(autouse=True)
@@ -59,8 +60,9 @@ def _no_ble_delays(monkeypatch):
 class FakeTimer:
     """Byte-level emulation of an HT34A B-Hyve XD over the session cipher."""
 
-    def __init__(self, key_hex: str = TEST_KEY, mac: str = TEST_MAC, *, clock: int = 1_751_000_000):
-        self.key = bytes.fromhex(key_hex)
+    def __init__(self, key_hex: str | None = TEST_KEY, mac: str = TEST_MAC, *, clock: int = 1_751_000_000):
+        self.key = bytes.fromhex(key_hex) if key_hex else None   # None = factory-fresh (unprovisioned)
+        self._provision_write = None                              # last value written to 6c76
         self.mac_bytes = bytes.fromhex(mac.replace(":", ""))
         self.clock = clock
         self.watering = False
@@ -199,6 +201,9 @@ class FakeClient:
             self.timer._last_rx = self.timer.handshake(data)
         elif char == WRITE_CHAR:
             self.timer.on_write(data)
+        elif char == PROVISION_CHAR:                 # 0x0100 || 16-byte key
+            self.timer._provision_write = data
+            self.timer.key = data[2:]                # device now holds the account key
 
     async def disconnect(self):
         self.is_connected = False
@@ -868,6 +873,56 @@ def test_catch_device_session_stays_open_for_live_control():
         addr, mac, st2 = asyncio.run(run())
     assert addr == "UUID-ROT-1" and mac == TEST_MAC
     assert st2.is_watering is True and timer.watering is True
+
+
+def test_provision_device_writes_key_then_verifies():
+    """App-free enrollment: catch a FACTORY-FRESH device (no key), write 0x0100||key to
+    the 6c76 characteristic, then verify with our normal handshake/read-back."""
+    import onboarding as O
+    t = FakeTimer(mac=TEST_MAC, key_hex=None)      # factory-fresh: no key yet
+    assert t.key is None
+    adverts = [_adv("UUID-FRESH", "", -55)]
+    with fake_catch_ble(adverts, lambda _a: t):
+        addr, mac, st = asyncio.run(O.provision_device(TEST_KEY, scan_timeout=2.0))
+    assert t.key == bytes.fromhex(TEST_KEY)                 # key written onto the device
+    assert t._provision_write[:2] == b"\x01\x00"           # the 0x0100 prefix
+    assert t._provision_write[2:] == bytes.fromhex(TEST_KEY)
+    assert addr == "UUID-FRESH" and mac == TEST_MAC
+    assert st.device_mac == TEST_MAC                        # verified live after the write
+
+
+def test_provision_device_times_out_when_no_bhyve():
+    import onboarding as O
+    with fake_catch_ble([_adv("UUID-DECOY", "TV", -40)], lambda _a: None):
+        with pytest.raises(O.ResolveError):
+            asyncio.run(O.provision_device(TEST_KEY, scan_timeout=0.3))
+
+
+def test_cli_register_provision_uses_provision_device(tmp_path, monkeypatch):
+    """`register --provision` writes the key to a fresh device (provision_device) rather
+    than just catching an already-enrolled one (catch_device)."""
+    import json
+    import cli
+    import onboarding as O
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"devices": [
+        {"name": "Old", "address": "X", "network_key": TEST_KEY, "mac": "AA", "stations": 4}]}))
+    called = {}
+
+    async def fake_provision(key, *, want_mac=None, **kw):
+        called["key"] = key
+        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
+        return "UUID-NEW", "44:67:55:D8:71:B0", st
+
+    async def must_not_catch(*a, **k):
+        raise AssertionError("provision path must not call catch_device")
+
+    monkeypatch.setattr(O, "provision_device", fake_provision)
+    monkeypatch.setattr(O, "catch_device", must_not_catch)
+    asyncio.run(cli.cmd_register(name="Fresh", path=str(p), ask_prompt=False, provision=True))
+    assert called["key"] == TEST_KEY
+    data = json.loads(p.read_text())
+    assert [d["name"] for d in data["devices"]] == ["Old", "Fresh"]
 
 
 def test_catch_device_times_out_when_no_bhyve():

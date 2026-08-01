@@ -113,9 +113,10 @@ default. Multiple timers on one account share one account key.
 - Backup checkpoint tag: **`onboarding-complete-2026-08-01`** (pushed).
 
 ## 10. Known gaps / possible future work
-- **App-free factory-reset onboarding** — provisioning is now **understood** (write
-  `0x0100`‖key to char `6c76`; `SPIKE_provisioning.md`, B3 = GO). **Buildable, not yet
-  built**: a `provision_device()` + a captured-sequence fake for tests.
+- **App-free factory-reset onboarding** — **built** (`onboarding.provision_device` +
+  `cli.py provision`): writes `0x0100`‖key to char `6c76`, then verifies. Offline-tested
+  against a fake fresh device; **live gate pending** (needs one factory reset to confirm
+  on hardware). Mechanism: `SPIKE_provisioning.md`.
 - **Catch-once-and-hold resident server** (`PLAN_catch_and_hold.md`) — deferred; the
   stable UUID made it unnecessary for the current units.
 - **Linux/BlueZ headless host** — addresses by MAC (no rotating-UUID problem); the

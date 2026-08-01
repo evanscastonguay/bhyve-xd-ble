@@ -454,6 +454,95 @@ async def catch_device_session(network_key_hex: str, *, want_mac: str | None = N
         "keep the timer close to the Mac and retry")
 
 
+# Provisioning characteristic — reverse-engineered from the Phase B HCI capture
+# (SPIKE_provisioning.md): a factory-fresh device accepts the account key as a single
+# plaintext write of 0x0100 || key to this characteristic. No pairing/encryption.
+PROVISION_CHAR = "00006c76-fe32-4f58-8b78-98e42b2c047f"
+
+
+async def provision_device(network_key_hex: str, *, want_mac: str | None = None,
+                           scan_timeout: float = 90.0, near_rssi: int = -80,
+                           tz_offset_sec: int | None = None) -> tuple[str, str, object]:
+    """Enroll a FACTORY-FRESH (pairing-mode) B-Hyve XD app-free: catch it, write the
+    account key to the 6c76 characteristic (0x0100 || 16-byte key), then verify with our
+    normal handshake + read-back. Returns (address, device_mac, DeviceStatus). Raises
+    ResolveError on timeout.
+
+    Precondition: the target device is factory-reset and in pairing mode, the phone's
+    Bluetooth is OFF, and ideally it's the only B-Hyve in pairing mode nearby (a fresh
+    device has no key yet, so we can't read its MAC to disambiguate *before* writing).
+    """
+    from bleak import BleakClient, BleakScanner
+
+    from bhyve_xd import BHyveXD
+
+    key = bytes.fromhex(network_key_hex)
+    payload = bytes([0x01, 0x00]) + key
+    want = want_mac.upper() if want_mac else None
+    tz = tz_offset_sec if tz_offset_sec is not None else host_tz_offset()
+    seen: set[str] = set()
+    queue: asyncio.Queue = asyncio.Queue()
+    n_bhyve = 0
+
+    def _cb(dev, adv):
+        r = adv.rssi if getattr(adv, "rssi", None) is not None else -999
+        if dev.address in seen or r < near_rssi:
+            return
+        seen.add(dev.address)
+        queue.put_nowait(dev)
+
+    scanner = BleakScanner(detection_callback=_cb)
+    await scanner.start()
+    deadline = time.monotonic() + scan_timeout
+    try:
+        while time.monotonic() < deadline:
+            try:
+                remaining = max(0.05, deadline - time.monotonic())
+                dev = await asyncio.wait_for(queue.get(), timeout=min(remaining, 1.0))
+            except asyncio.TimeoutError:
+                continue
+            try:
+                client = BleakClient(dev)
+                await client.connect()
+            except Exception:
+                continue
+            if not any("fe32" in s.uuid.lower() for s in client.services):
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                continue
+            n_bhyve += 1
+            try:
+                # THE provisioning step: write 0x0100 || key to 6c76 (plaintext).
+                await client.write_gatt_char(PROVISION_CHAR, payload, response=True)
+                # Verify with the normal session on the same connection (device now keyed).
+                sess = BHyveXD(dev.address, network_key_hex, tz_offset_sec=tz).session(client=client)
+                await sess.__aenter__()
+                await sess.arm()
+                st = await sess.read_status()
+            except Exception:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                continue
+            if st is not None and st.device_mac and (want is None or st.device_mac.upper() == want):
+                await sess.__aexit__(None, None, None)
+                return dev.address, st.device_mac, st
+            await sess.__aexit__(None, None, None)   # provisioned but not the wanted MAC — keep looking
+    finally:
+        try:
+            await scanner.stop()
+        except Exception:
+            pass
+    target = want_mac or "a factory-fresh B-Hyve"
+    raise ResolveError(
+        f"could not provision {target} within {scan_timeout:.0f}s (saw {len(seen)} device(s), "
+        f"{n_bhyve} B-Hyve) — is it factory-reset and in PAIRING MODE, phone Bluetooth OFF, "
+        "and close to the Mac?")
+
+
 async def catch_device(network_key_hex: str, *, want_mac: str | None = None,
                        scan_timeout: float = 90.0, near_rssi: int = -80,
                        tz_offset_sec: int | None = None) -> tuple[str, str, object]:
