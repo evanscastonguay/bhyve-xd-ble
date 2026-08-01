@@ -14,8 +14,10 @@ reads status back for confirmation.
     python cli.py selftest            # autonomous set->read->start->read->stop->read
     python cli.py scan                # list nearby BLE devices (find the address)
     python cli.py login [email]       # cloud login -> print devices + keys (--dry-run)
-    python cli.py register [email]    # discover + save a NEW timer to config.json
+    python cli.py register [email]    # discover + save a NEW (already-enrolled) timer
                                       #   --name NAME  --device-mac MAC  --show-key
+    python cli.py provision [email]   # enroll a FACTORY-FRESH timer app-free (writes the
+                                      #   key onto it), then save to config.json
 
 With multiple timers in config.json, pick one with --device (name or 0-based index);
 the default is the first device:
@@ -124,13 +126,16 @@ def _choose_device(devices, choose_fn=input):
 
 
 async def cmd_register(email=None, *, name=None, want_mac=None, show_key=False,
-                       path="config.json", ask_prompt=True, choose_fn=input):
+                       path="config.json", ask_prompt=True, choose_fn=input, provision=False):
     """Discover a NEW timer and save it to config.json — one command, no hand-editing.
 
     Key: reuse the account key already in config.json (adding another timer on the
     same account needs NO cloud login); only log in when there's no key yet (or an
     email is given). Then: prompt to release the phone -> catch the timer's live
     advertisement -> read its MAC + status back -> write config -> confirm.
+
+    provision=True enrolls a FACTORY-FRESH device app-free: it writes the account key
+    onto the device (6c76) first, instead of just catching an already-enrolled one.
     """
     import getpass
 
@@ -178,12 +183,18 @@ async def cmd_register(email=None, *, name=None, want_mac=None, show_key=False,
         name = name or chosen.get("name")
 
     if ask_prompt:
-        input("\nTurn your phone's Bluetooth OFF so it isn't holding the timer, keep the "
-              "timer close to the Mac, then press Enter to search... ")
+        if provision:
+            input("\nFactory-reset the timer into PAIRING MODE (dial to OFF, hold ~10s until the "
+                  "full display lights up), turn the phone's Bluetooth OFF, keep it close, then "
+                  "press Enter to provision... ")
+        else:
+            input("\nTurn your phone's Bluetooth OFF so it isn't holding the timer, keep the "
+                  "timer close to the Mac, then press Enter to search... ")
+    discover = onboarding.provision_device if provision else onboarding.catch_device
     try:
-        address, mac, st = await onboarding.catch_device(key, want_mac=want_mac)
+        address, mac, st = await discover(key, want_mac=want_mac)
     except onboarding.ResolveError as e:
-        print(f"\nregister failed: {e}")
+        print(f"\n{'provision' if provision else 'register'} failed: {e}")
         return
 
     device = {"name": name or "B-Hyve XD", "address": address,
@@ -276,6 +287,9 @@ def main():
     elif cmd == "register":
         email, name, want_mac, show_key = _parse_register(a[1:])
         asyncio.run(cmd_register(email, name=name, want_mac=want_mac, show_key=show_key))
+    elif cmd == "provision":
+        email, name, want_mac, show_key = _parse_register(a[1:])
+        asyncio.run(cmd_register(email, name=name, want_mac=want_mac, show_key=show_key, provision=True))
     else:
         print(__doc__)
 
