@@ -99,6 +99,24 @@ another timer on the same account needs **no cloud login**; the very first devic
 in once to fetch the key) → prompt you to release the phone → **catch the timer's live
 advertisement** → read its own MAC + status back → write `config.json` → confirm.
 
+### First run (no config yet)
+
+Starting from **nothing**, give your Orbit email; it logs in once, fetches the account
+key, and onboards the device — verified end-to-end on real hardware:
+
+```bash
+python cli.py register you@example.com --name "Back Yard"
+```
+
+- You'll be prompted for your Orbit password at a **hidden** prompt (never stored, never
+  logged; MFA accounts aren't supported and are reported clearly).
+- If several timers are on the account, you'll get a **numbered chooser** (or pass
+  `--device-mac <MAC>` to skip it).
+- After this first run the key is saved, so every later timer skips the cloud login.
+
+Requires prior Orbit-app setup: this reuses the account key the app provisioned onto the
+device — it does not enroll a factory-fresh device. See `PROJECT_STATUS.md` §5–6.
+
 > **The one precondition:** turn your **phone's Bluetooth OFF** before pressing Enter. A
 > B-Hyve accepts only one BLE connection and won't advertise while the phone holds it —
 > with the phone released, the timer advertises freely and is caught reliably (this also

@@ -18,11 +18,15 @@ touched **once**, at setup, only to fetch the account's BLE network key.
 - **Multi-device** — `config.json` holds a `devices` list; pick one via `--device`
   (CLI), `?device=` (REST), or the UI dropdown. First entry is the default.
 - **Onboarding / register a new timer** — one flow, two front-ends:
-  - CLI: `cli.py register [--name N] [--device-mac MAC]`
+  - CLI: `cli.py register [email] [--name N] [--device-mac MAC]`
   - Web: **＋ Add timer** in the UI (`POST /api/onboard/register`)
   Reuses the account key already in config (**no cloud login for additional timers**),
   prompts to release the phone, **catches the timer's advertisement**, reads its MAC +
   status, writes `config.json`, and verifies.
+- **First run from zero config** — with just an Orbit email + password it logs in, fetches
+  the account key, and onboards the device. **Live-verified 2026-08-01** end-to-end (empty
+  config → cloud login → key fetch → catch → write → status read-back). A numbered chooser
+  handles multiple account devices; MFA accounts are reported (not supported).
 - **Discovery** — `onboarding.catch_device` (connect-on-detection; robust to rotating
   addresses). `catch_device_session` returns an open session for held-connection use.
 - **Testing** — hardware-free: **55 offline checks + 41 end-to-end tests** (fake device).
