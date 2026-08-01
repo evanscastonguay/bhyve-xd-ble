@@ -1,51 +1,42 @@
 #!/usr/bin/env python3
 """
-bhyve_lab.py — interactive onboarding lab for a NEW B-Hyve timer on macOS.
+bhyve_lab.py — interactive diagnostic for controlling a B-Hyve timer live on macOS.
 
-WHY THIS EXISTS
-  The new timer (MAC AA:BB:CC:DD:EE:01) advertises with a ROTATING/private BLE
-  address and only re-advertises for a few seconds after the bonded iPhone lets
-  go of it. So we can't pre-target a fixed address; we must CATCH whatever address
-  it advertises the instant the phone releases it, then drive the protocol on that
-  live connection. This tool lets YOU control the timing while it logs everything.
+For NORMAL onboarding use `cli.py register` (one command). This tool is the hands-on
+diagnostic: it catches a timer and drops you into a live menu so you can repeatedly
+start/stop/read on ONE held connection while watching a timestamped log — handy for
+debugging a flaky unit or the phone hand-off.
 
-  The catch connects ONCE to the live advertisement and hands that connected
-  client to the proven bhyve_xd session (BHyveXD.session(client=...)) — so this
-  tool runs the SAME arm/command/read-back code the CLI and server use, not a copy.
+It reuses the SAME discovery + protocol as the product: `onboarding.catch_device_session`
+(connect-on-detection, robust to rotating addresses) → the proven bhyve_xd session. No
+duplicated BLE logic lives here anymore.
 
 HOW TO RUN (in your own Terminal, from the project directory)
     cd path/to/bhyve-xd-ble
     ./venv/bin/python bhyve_lab.py
 
   Everything you see is ALSO written, timestamped, to  bhyve_lab.log
-  (share that file — or just leave it — and Claude can read the full trace).
 
 MENU
-  1) Ambient scan        — list nearby BLE devices (baseline; no timer needed)
-  2) Capture the timer   — guided phone-release flow -> connect -> arm -> control
+  1) Ambient scan        — list nearby BLE devices (no timer needed)
+  2) Capture the timer   — phone-off prompt -> catch -> live control
   3) Where is the log    — print the log file path
   q) Quit
 
-Nothing here resets the device or changes the proven bhyve_xd control logic.
+Precondition for capture: the phone must NOT be holding the timer (its Bluetooth OFF),
+so the timer advertises freely. Nothing here resets the device.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-import time
 from datetime import datetime
 
-from bleak import BleakClient, BleakScanner
-
-from bhyve_xd import BHyveXD, NotABHyveError, host_tz_offset
+from bleak import BleakScanner
 
 WANT_MAC = "AA:BB:CC:DD:EE:01"
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bhyve_lab.log")
-
-BASELINE_S = 7.0        # learn ambient devices before reacting
-NEAR_RSSI = -80         # only react to reasonably-close new devices
-CAPTURE_TIMEOUT = 90.0  # give up catching the timer after this long
 
 
 # --------------------------------------------------------------------------- #
@@ -58,13 +49,12 @@ class Log:
 
     def line(self, msg: str = ""):
         ts = datetime.now().strftime("%H:%M:%S")
-        text = f"[{ts}] {msg}" if msg else ""
+        self._f.write((f"[{ts}] {msg}" if msg else "") + "\n")
         print(msg)
-        self._f.write(text + "\n")
 
     def raw(self, msg: str):
-        print(msg)
         self._f.write(msg + "\n")
+        print(msg)
 
 
 async def ask(prompt: str) -> str:
@@ -72,9 +62,6 @@ async def ask(prompt: str) -> str:
     return (await asyncio.to_thread(input, prompt)).strip()
 
 
-# --------------------------------------------------------------------------- #
-# Actions
-# --------------------------------------------------------------------------- #
 def _load_key_hex(log: Log) -> str | None:
     try:
         with open("config.json") as f:
@@ -87,81 +74,13 @@ def _load_key_hex(log: Log) -> str | None:
 
 
 async def ambient_scan(log: Log):
-    log.line("ambient scan 10s — devices nearby (helps us learn what's NOT the timer):")
+    log.line("ambient scan 10s — devices nearby (helps confirm the Mac's BLE works):")
     devs = await BleakScanner.discover(timeout=10, return_adv=True)
     rows = sorted(((adv.rssi or -999, d.name, addr) for addr, (d, adv) in devs.items()),
                   key=lambda t: t[0], reverse=True)
     for rssi, name, addr in rows:
         log.raw(f"    rssi={rssi:>4}  {name or '(no name)':26}  {addr}")
     log.line(f"ambient scan done ({len(rows)} devices).")
-
-
-async def catch(log: Log):
-    """Guided catch of the rotating-address timer. Returns (BLEDevice, connected
-    BleakClient) for the first nearby device that has the fe32 service, else
-    (None, None). The scanner is stopped once a B-Hyve is caught."""
-    log.line("")
-    log.line("=== CAPTURE ===")
-    log.line("STEP 1. On your phone: open the B-Hyve app so it CONNECTS to the timer.")
-    await ask("        Press Enter once the app is connected to the timer... ")
-
-    baseline: set[str] = set()
-    tried: set[str] = set()
-    pending: dict = {}
-    start = time.monotonic()
-
-    def cb(dev, adv):
-        if pending:
-            return
-        t = time.monotonic() - start
-        r = adv.rssi if adv.rssi is not None else -999
-        if t < BASELINE_S:
-            baseline.add(dev.address)
-            return
-        if dev.address in baseline or dev.address in tried or r < NEAR_RSSI:
-            return
-        tried.add(dev.address)
-        log.line(f"NEW close device @ {t:.1f}s: {dev.name or '(no name)'} rssi={r} {dev.address}")
-        pending['dev'] = dev
-
-    log.line(f"STEP 2. Starting scan. Learning ambient devices for {BASELINE_S:.0f}s — "
-             "keep the phone connected during this.")
-    scanner = BleakScanner(detection_callback=cb)
-    await scanner.start()
-    await asyncio.sleep(BASELINE_S)
-    log.line(f"        baseline learned ({len(baseline)} ambient devices).")
-    log.line("STEP 3. NOW RELEASE THE PHONE: force-quit the B-Hyve app AND turn phone")
-    log.line("        Bluetooth OFF. Then keep the timer still and WAIT.")
-    log.line(f"        (waiting up to {CAPTURE_TIMEOUT:.0f}s for the timer to re-advertise...)")
-
-    deadline = time.monotonic() + CAPTURE_TIMEOUT
-    while time.monotonic() < deadline:
-        if not pending:
-            await asyncio.sleep(0.3)
-            continue
-        dev = pending.pop('dev')
-        log.line(f"        connecting to {dev.address} ...")
-        try:
-            client = BleakClient(dev)
-            await client.connect()
-        except Exception as e:
-            log.line(f"        connect failed ({type(e).__name__}: {e}); waiting for next advert...")
-            continue
-        if not any("fe32" in s.uuid.lower() for s in client.services):
-            log.line("        -> not a B-Hyve (no fe32); disconnecting, waiting for next...")
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-            continue
-        log.line(f"        -> fe32 present: this IS a B-Hyve. Caught {dev.address}")
-        await scanner.stop()
-        return dev, client
-
-    await scanner.stop()
-    log.line("CAPTURE TIMED OUT — no B-Hyve caught. Tips: make sure you turned phone")
-    log.line("Bluetooth OFF (not just closed the app), and the timer is close to the Mac.")
-    return None, None
 
 
 def _fmt(st) -> str:
@@ -201,30 +120,30 @@ async def capture_flow(log: Log):
     keyhex = _load_key_hex(log)
     if keyhex is None:
         return
-    dev_ble, client = await catch(log)
-    if client is None:
-        return
-    log.line(f"captured address this session: {dev_ble.address}")
-    log.line("NOTE: if this is a rotating/privacy address it will differ next time — "
-             "that's expected; we'll solve persistence once control is proven.")
-    bh = BHyveXD(dev_ble.address, keyhex, tz_offset_sec=host_tz_offset())
+    import onboarding
+
+    log.line("")
+    log.line("=== CAPTURE ===")
+    log.line("Turn your phone's Bluetooth OFF so it isn't holding the timer, keep it close.")
+    await ask("Press Enter to search for the timer... ")
     try:
-        # Adopt the connection we just caught and run the PROVEN session protocol.
-        async with bh.session(client=client) as sess:
-            await sess.arm()
-            st = await sess.read_status()
-            log.line("first status after arm: " + _fmt(st))
-            if st and st.device_mac and st.device_mac.upper() == WANT_MAC.upper():
-                log.line(f"*** CONFIRMED new timer {WANT_MAC} at {dev_ble.address}")
-            elif st and st.device_mac:
-                log.line(f"(a B-Hyve, but MAC {st.device_mac} != target {WANT_MAC})")
-            await live_control(sess, dev_ble.address, log)
-    except NotABHyveError as e:
-        log.line(f"not a B-Hyve after all: {e}")
-    except Exception as e:
-        log.line(f"session error ({type(e).__name__}: {e})")
+        address, mac, st, sess = await onboarding.catch_device_session(keyhex, scan_timeout=90.0)
+    except onboarding.ResolveError as e:
+        log.line(f"capture failed: {e}")
+        return
+
+    log.line(f"caught {mac} at {address}")
+    log.line("first status after arm: " + _fmt(st))
+    if mac and mac.upper() == WANT_MAC.upper():
+        log.line(f"*** matches target {WANT_MAC}")
+    try:
+        await live_control(sess, address, log)
     finally:
-        log.line(f"released connection to {dev_ble.address}.")
+        try:
+            await sess.__aexit__(None, None, None)
+        except Exception:
+            pass
+        log.line(f"released connection to {address}.")
 
 
 async def main():
