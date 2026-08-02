@@ -34,11 +34,10 @@ app never opened** — the last step of that is proven, not just claimed.
 - Two key modes exist: **Orbit** (`provision` / `register` — account key, app + our tools
   interoperate) and **self-key** (`provision --self-key` — our own generated key, no Orbit
   account; the key is stashed in `secrets/` and the Orbit app can't control the device).
-  Self-key mode is **built and its durability was demonstrated on hardware** (a timer
-  keyed with our own key survived multiple power-cycles and is controllable via
-  `config.json`); a fully confound-free proof-harness PASS is still outstanding (the
-  automated verify was thrown off by the phone holding the device — now hardened). The
-  Orbit-key path has the airtight harness PASS.
+  **Both modes now have an airtight, confound-free proof-harness PASS on hardware**
+  (2026-08-02): a timer keyed with **our own** key (no Orbit account, app never opened) was
+  confirmed keyless first, provisioned, and **survived 3 power-cycles**, each re-verified in
+  a fresh process — the same bar the Orbit-key path met.
 
 Full detail + evidence: `PROJECT_STATUS.md`, `SPIKE_provisioning.md`, `provision_proof.py`.
 
