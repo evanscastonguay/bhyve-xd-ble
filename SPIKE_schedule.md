@@ -129,3 +129,17 @@ our replayed schedule and reverts cleanly — non-destructive & reversible.
 **P4b next:** encode SetProgramSchedule+SetActivePrograms from the UI's saved rules; verify by
 `getActivePrograms`; power-cycle durability. (Day-of-week `dayFlags` bit order still TBD —
 interval/daily fully covered.)
+
+## P4b DURABILITY — PROVEN (2026-08-02), plus a critical gotcha
+On-device schedules **persist across the Mac being off**: wrote Program A + enabled (flags=1),
+disconnected 25s (timer powered), reconnected and read flags = **1** (still active). On-device
+autonomous scheduling WORKS.
+
+⚠️ **CRITICAL CONFOUND / integration gotcha:** `arm()` sends **`SETUP_FIELD20` = setActivePrograms{0}**
+on EVERY connect — it DISABLES all active programs. My first durability tests (power-cycle AND
+disconnect) all read flags=0 only because my own `arm()` on reconnect wiped the flag before the
+read; the schedule itself persisted. **Implication for P4c:** our normal control path arms on
+every session, so it will disable any on-device schedule. The engine must **re-enable
+active programs after arming** (as the app does), or use an arm variant WITHOUT SETUP_FIELD20.
+Battery power-cycle persistence is still inconclusive (those reads were confounded too) but
+secondary — the Mac-off case is what matters and it's proven.
