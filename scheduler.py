@@ -10,6 +10,8 @@ local time (host-driven = the Mac near the timer triggers at its own local clock
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 
 def due_rules(rules: list[dict], now, grace_min: int = 0) -> list[dict]:
     """Rules enabled, scheduled for now.weekday(), whose start time is at (or up to `grace_min`
@@ -29,3 +31,22 @@ def due_rules(rules: list[dict], now, grace_min: int = 0) -> list[dict]:
         if wd in (r.get("days") or []) and 0 <= now_min - start_min <= grace_min:
             out.append(r)
     return out
+
+
+def next_occurrence(start: str, days: list[int], now: datetime):
+    """The next datetime strictly after `now` matching a rule's start "HH:MM" on one of its
+    weekdays (0=Mon..6=Sun). Returns None if the rule has no days / bad start. Pure — for the
+    'next scheduled run' display."""
+    try:
+        hh, mm = str(start).split(":")
+        hh, mm = int(hh), int(mm)
+    except (ValueError, AttributeError):
+        return None
+    days = set(days or [])
+    if not days:
+        return None
+    for offset in range(0, 8):
+        cand = (now + timedelta(days=offset)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if cand.weekday() in days and cand > now:
+            return cand
+    return None
