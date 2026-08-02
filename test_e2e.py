@@ -152,9 +152,10 @@ class FakeTimer:
     def _status_plaintext(self) -> bytes:
         body = B._fb(1, self.mac_bytes) + B._fv(7, self.clock)
         if self.watering:
-            # field 6 = active run: tfn1 = constant run-type(2), tfn4 = 1-indexed station,
-            # tfn7 = seconds (mirrors the real device wire format)
-            sub = B._fv(1, 4) + B._fb(6, B._fv(1, 2) + B._fv(4, self.station or 0) + B._fv(7, self.seconds or 0))
+            # field 6 = active run: tfn1 = constant run-type(2), tfn4 = 0-INDEXED station
+            # (self.station is 1-indexed, so emit station-1), tfn7 = seconds. Mirrors the
+            # real device wire format so parse_reply's +1 yields the 1-indexed active_zone.
+            sub = B._fv(1, 4) + B._fb(6, B._fv(1, 2) + B._fv(4, (self.station or 1) - 1) + B._fv(7, self.seconds or 0))
         else:
             sub = B._fv(1, 1)
         body += B._fb(16, sub)
@@ -263,8 +264,9 @@ def test_status_reads_clock_and_idle():
     assert st.device_time == t.clock
 
 
-# Real decrypted status bytes captured live from the device (Smart Hose Tap Timer):
-# WATERING = Valve 2 running 300s; IDLE = after stop. Used to prove active_zone parsing.
+# Real decrypted status bytes captured live from the device (Smart Hose Tap Timer).
+# The active station in field 16->6->tfn4 is 0-INDEXED (proven by a controlled start-sweep:
+# Valve N -> f4 = N-1), so active_zone = f4 + 1. This capture has raw f4=2 => Valve 3.
 _REAL_WATERING = bytes.fromhex(
     "aa775a0f5b000a06446755d871b038cfd5bdd3068201480804120f0802120b10001a05080210ac02"
     "2000321508021800200228ac0232070800100218ac0238ac023a00480050006a0408002000720318"
@@ -272,8 +274,8 @@ _REAL_WATERING = bytes.fromhex(
 _REAL_IDLE = bytes.fromhex(
     "aa775a0f37000a06446755d871b038e3d5bdd3068201240800120208003a00480050006a04080020"
     "0072031889167a0082010800000000000000006296")
-# Same device, Valve 3 running — proves the parser DISTINGUISHES zones (field 16->6->tfn4
-# = 3 here vs 2 above; tfn1 is a constant 2 in both, which is why reading it lit all as #2).
+# Same device, a different zone — raw f4=3 => Valve 4. Proves the parser DISTINGUISHES
+# zones (f4=2 vs 3 above; tfn1 is a constant 2 in both, which is why reading it lit all as #2).
 _REAL_WATERING_Z3 = bytes.fromhex(
     "aa775a0f5b000a06446755d871b038d0ddbdd3068201480804120f0802120b10001a05080310ac02"
     "2000321508021800200328ac0232070800100318ac0238ac023a00480050006a0408002000720318"
@@ -281,19 +283,19 @@ _REAL_WATERING_Z3 = bytes.fromhex(
 
 
 def test_active_zone_parsed_from_real_watering_capture():
-    """PROOF (real device bytes): while Valve 2 waters, active station = field 16->6->tfn4 = 2."""
+    """PROOF (real device bytes): raw f4=2 (0-indexed) -> 1-indexed active_zone == 3 (Valve 3)."""
     st = parse_reply(_REAL_WATERING)
     assert st.is_watering is True and st.seconds_remaining == 300
-    assert st.active_zone == 2                       # matches the physical Valve 2
-    assert st.to_dict()["active_zone"] == 2          # surfaced to the REST/UI layer
+    assert st.active_zone == 3                        # raw f4=2, +1 -> Valve 3
+    assert st.to_dict()["active_zone"] == 3           # surfaced to the REST/UI layer
 
 
 def test_active_zone_distinguishes_zones_real_capture():
-    """PROOF the fix isn't a Valve-2 coincidence: Valve 3 capture -> active_zone == 3
-    (tfn4 tracks the zone; tfn1 is a constant 2 in both captures)."""
-    z2 = parse_reply(_REAL_WATERING)
-    z3 = parse_reply(_REAL_WATERING_Z3)
-    assert z2.active_zone == 2 and z3.active_zone == 3
+    """PROOF the fix isn't a single-zone coincidence, and the +1 offset holds: two real
+    captures with raw f4=2 and 3 map to Valve 3 and Valve 4."""
+    a = parse_reply(_REAL_WATERING)       # raw f4=2 -> 3
+    b = parse_reply(_REAL_WATERING_Z3)    # raw f4=3 -> 4
+    assert a.active_zone == 3 and b.active_zone == 4
 
 
 def test_active_zone_none_when_idle_real_capture():
