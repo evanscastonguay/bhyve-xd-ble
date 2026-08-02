@@ -44,6 +44,13 @@
   .tabs:empty{display:none}
   .tab{background:#21262d;color:var(--mut);font-size:13px;padding:7px 14px;border-radius:8px}
   .tab.active{background:var(--blue);color:#fff}
+  .modeseg{display:flex;gap:4px;margin-top:12px;background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:3px;width:max-content}
+  .seg{background:transparent;color:var(--mut);padding:6px 16px;border-radius:6px;font-size:13px}
+  .seg.active{background:var(--blue);color:#fff}
+  .schadd{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .schrule{display:flex;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:13px}
+  .daybox{display:inline-flex;gap:6px}
+  .daybox label{display:inline-flex;gap:3px;align-items:center;font-size:12px;color:var(--mut);cursor:pointer}
   .ctlhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .ctlhead b{font-size:15px}
   .viewhead{display:flex;align-items:center;gap:10px;margin-bottom:12px}
@@ -71,7 +78,7 @@
     <button class="bon" onclick="startAdd()">＋ Add your first timer</button>
   </div>
 
-  <!-- ============ VIEW: control (≥1 timer) ============ -->
+  <!-- ============ VIEW: control (≥1 timer) — Now | Schedule modes ============ -->
   <div id="v_control" style="display:none">
     <div class="card">
       <div id="tabs" class="tabs"></div>
@@ -82,14 +89,43 @@
           <button class="ghost" onclick="removeCurrent()" title="Remove this timer from the app">🗑 Remove</button>
         </span>
       </div>
-      <div class="statusrow" style="margin-top:12px">
-        <span>State: <span id="state" class="pill idle">—</span></span>
-        <span id="remain" class="min"></span>
-        <button class="ghost" style="margin-left:auto" onclick="refresh()">↻ Refresh</button>
+      <div class="modeseg">
+        <button class="seg active" id="seg_now" onclick="setMode('now')">Now</button>
+        <button class="seg" id="seg_sched" onclick="setMode('schedule')">🗓 Schedule</button>
       </div>
-      <div id="busy"><span class="spin"></span><span id="busytxt">working… (BLE takes ~10s)</span></div>
     </div>
-    <div class="card" id="valves"></div>
+
+    <!-- mode: Now (manual control) -->
+    <div id="body_now">
+      <div class="card">
+        <div class="statusrow">
+          <span>State: <span id="state" class="pill idle">—</span></span>
+          <span id="remain" class="min"></span>
+          <button class="ghost" style="margin-left:auto" onclick="refresh()">↻ Refresh</button>
+        </div>
+        <div id="busy"><span class="spin"></span><span id="busytxt">working… (BLE takes ~10s)</span></div>
+      </div>
+      <div class="card" id="valves"></div>
+    </div>
+
+    <!-- mode: Schedule (author rules; engine wired later) -->
+    <div id="body_schedule" style="display:none">
+      <div class="card">
+        <div class="hint" style="margin-top:0">Saved schedules don't run yet — the scheduling
+          engine comes next. For now this just stores when you'd like each valve to water.</div>
+        <div id="sch_list" style="margin:12px 0"></div>
+        <div class="schadd">
+          <select id="sch_valve" title="valve"></select>
+          <input id="sch_start" type="time" value="06:00" title="start time">
+          <span id="sch_days"></span>
+          <input id="sch_min" type="number" value="5" min="1" max="120" style="width:56px"><span class="min">min</span>
+          <button class="bon" onclick="schAddRule()">＋ Add rule</button>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px">
+          <button class="bon" onclick="schSave()">Save schedules</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ============ VIEW: add (setup takeover) ============ -->
@@ -313,7 +349,51 @@ async function loadSelected(){
   $("#ctl_name").textContent=d.name||("Timer "+(curIndex+1));
   $("#state").textContent="reading…"; $("#state").className="pill idle";
   buildValves(d.stations||4);
+  buildScheduleForm(d.stations||4);
+  setMode("now");                       // every timer switch starts on Now
   await refresh();
+}
+
+// ---- Schedule mode (author rules; engine wired later) ----
+const DOW=["Mo","Tu","We","Th","Fr","Sa","Su"];   // 0=Mon .. 6=Sun
+let schedRules=[];
+function setMode(m){
+  const sched = m==="schedule";
+  $("#seg_now").classList.toggle("active",!sched);
+  $("#seg_sched").classList.toggle("active",sched);
+  $("#body_now").style.display=sched?"none":"block";
+  $("#body_schedule").style.display=sched?"block":"none";
+  if(sched) schLoad();
+}
+function buildScheduleForm(stations){
+  $("#sch_valve").innerHTML=Array.from({length:stations},(_,i)=>`<option value="${i+1}">Valve ${i+1}</option>`).join("");
+  $("#sch_days").innerHTML=`<span class="daybox">`+
+    DOW.map((d,i)=>`<label><input type="checkbox" class="dchk" value="${i}"${i<5?" checked":""}>${d}</label>`).join("")+`</span>`;
+}
+async function schLoad(){
+  try{ const r=await api("GET",`/api/timers/${curIndex}/schedules`); schedRules=r.schedules||[]; }
+  catch(e){ schedRules=[]; banner("Couldn't load schedules: "+e.message,"err"); }
+  renderSchedList();
+}
+function renderSchedList(){
+  $("#sch_list").innerHTML = schedRules.length
+    ? schedRules.map((r,i)=>`<div class="schrule"><span><b>Valve ${r.valve}</b> · ${esc(r.start)} · `
+        +`${(r.days||[]).map(d=>DOW[d]||d).join(" ")} · ${r.minutes}min${r.enabled===false?" (off)":""}</span>`
+        +`<button class="ghost" style="margin-left:auto;padding:4px 10px" onclick="schRemove(${i})">Remove</button></div>`).join("")
+    : `<div class="min">No schedules yet.</div>`;
+}
+function schAddRule(){
+  const days=[...document.querySelectorAll("#sch_days .dchk:checked")].map(c=>+c.value);
+  if(!days.length){ banner("Pick at least one day.","err"); return; }
+  schedRules.push({valve:+$("#sch_valve").value, start:$("#sch_start").value,
+                   days, minutes:parseInt($("#sch_min").value)||5, enabled:true});
+  banner(null); renderSchedList();
+}
+function schRemove(i){ schedRules.splice(i,1); renderSchedList(); }
+async function schSave(){
+  try{ const r=await api("PUT",`/api/timers/${curIndex}/schedules`,{rules:schedRules});
+       schedRules=r.schedules; renderSchedList(); banner("Schedules saved (won't run until the engine is added).","ok"); }
+  catch(e){ banner("Couldn't save: "+e.message,"err"); }
 }
 
 // ---- onboarding wizard (SSE step tracker) ----
