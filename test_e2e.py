@@ -1846,6 +1846,70 @@ def test_write_account_refuses_to_clobber_malformed(tmp_path):
     assert p.read_text() == "{ not json "                 # original left intact
 
 
+# --- P1: engine-agnostic schedule store (per-timer, no BLE, no engine) ---------
+def _cfg_with_timer(tmp_path, mac=TEST_MAC, stations=4, name="A"):
+    import onboarding as O
+    p = tmp_path / "config.json"
+    O.write_config(str(p), {"name": name, "address": "UUID-" + name, "network_key": TEST_KEY,
+                            "mac": mac, "stations": stations})
+    return str(p)
+
+
+def test_schedule_roundtrip_by_mac(tmp_path):
+    import schedule as S
+    p = _cfg_with_timer(tmp_path)
+    assert S.read_schedules(p, TEST_MAC) == []
+    S.write_schedules(p, TEST_MAC, [{"valve": 2, "start": "06:00", "days": [0, 2, 4], "minutes": 5}])
+    got = S.read_schedules(p, TEST_MAC)
+    assert len(got) == 1
+    r = got[0]
+    assert r["valve"] == 2 and r["start"] == "06:00" and r["days"] == [0, 2, 4]
+    assert r["minutes"] == 5 and r["enabled"] is True          # default enabled
+
+
+def test_schedule_per_device_isolation_and_preserves_config(tmp_path):
+    import json
+    import onboarding as O
+    import schedule as S
+    p = _cfg_with_timer(tmp_path, mac="44:67:55:D8:78:00", name="Zone")
+    O.write_config(p, {"name": "Tap", "address": "UUID-Tap", "network_key": TEST_KEY,
+                       "mac": "44:67:55:D8:71:B0", "stations": 4})
+    O.write_account(p, "me@x.com", TEST_KEY)
+    S.write_schedules(p, "44:67:55:D8:71:B0", [{"valve": 1, "start": "07:30", "days": [6], "minutes": 10}])
+    assert S.read_schedules(p, "44:67:55:D8:78:00") == []       # other timer untouched
+    assert len(S.read_schedules(p, "44:67:55:D8:71:B0")) == 1
+    cfg = json.loads(open(p).read())
+    assert cfg["account"]["email"] == "me@x.com"                # account preserved
+    assert {d["name"] for d in cfg["devices"]} == {"Zone", "Tap"}
+
+
+def test_schedule_validation_rejects_bad_rules(tmp_path):
+    import pytest as _pt
+    import schedule as S
+    p = _cfg_with_timer(tmp_path, stations=4)
+    for bad in [
+        {"valve": 0, "start": "06:00", "days": [0], "minutes": 5},     # valve < 1
+        {"valve": 5, "start": "06:00", "days": [0], "minutes": 5},     # valve > stations
+        {"valve": 1, "start": "6:00", "days": [0], "minutes": 5},      # bad HH:MM
+        {"valve": 1, "start": "24:00", "days": [0], "minutes": 5},     # hour out of range
+        {"valve": 1, "start": "06:00", "days": [], "minutes": 5},      # no days
+        {"valve": 1, "start": "06:00", "days": [7], "minutes": 5},     # day out of range
+        {"valve": 1, "start": "06:00", "days": [0], "minutes": 0},     # duration < 1
+        {"valve": 1, "start": "06:00", "days": [0], "minutes": 999},   # duration too big
+    ]:
+        with _pt.raises(S.ScheduleError):
+            S.write_schedules(p, TEST_MAC, [bad])
+    assert S.read_schedules(p, TEST_MAC) == []                  # nothing written on rejection
+
+
+def test_schedule_write_unknown_mac_raises(tmp_path):
+    import pytest as _pt
+    import schedule as S
+    p = _cfg_with_timer(tmp_path)
+    with _pt.raises(S.ScheduleError):
+        S.write_schedules(p, "AA:BB:CC:DD:EE:FF", [{"valve": 1, "start": "06:00", "days": [0], "minutes": 5}])
+
+
 def test_resolve_linux_returns_mac():
     import onboarding as O
     got = asyncio.run(O.resolve_address(TEST_MAC, TEST_KEY, platform_name="linux"))
