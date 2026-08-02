@@ -93,13 +93,27 @@ def _load_key(log=None):
 # Fresh-process verify entrypoint (spawned as `provision_proof.py --verify`).
 # Reads the key from $BHYVE_KEY so it never appears in the process argument list.
 # --------------------------------------------------------------------------- #
-async def verify_once():
+async def verify_once(attempts=3):
     from onboarding import catch_device_session, ResolveError
     key = os.environ.get("BHYVE_KEY") or _load_key()
-    try:
-        addr, mac, st, sess = await catch_device_session(key, scan_timeout=45)
-    except ResolveError as e:
-        print(json.dumps({"decoded": False, "error": str(e)}))
+    # Retry: a post-reboot timer can take a moment to advertise, and a "0 B-Hyve" miss is
+    # usually the phone briefly holding the device (BLE connect is key-independent) — not a
+    # key failure. Several 45s catches make the verify robust to that discovery flakiness.
+    sess = None
+    last = None
+    for _ in range(attempts):
+        try:
+            addr, mac, st, sess = await catch_device_session(key, scan_timeout=45)
+            break
+        except ResolveError as e:
+            last, sess = str(e), None
+    if sess is None:
+        hint = ""
+        if last and "0 B-Hyve" in last:
+            hint = ("0 B-Hyve = the timer wasn't advertising/connectable — make sure the "
+                    "phone's Bluetooth is OFF (it can hold the device even with a self-key) "
+                    "and tap the dial to wake it")
+        print(json.dumps({"decoded": False, "error": last, "hint": hint}))
         return
     out = {"decoded": True, "mac": mac, "addr": addr, "clock": st.clock_str}
     try:
@@ -184,9 +198,10 @@ async def run_proof(log, key, want_mac=None, cycles=MIN_CYCLES):
 
     cyc = []
     for i in range(1, cycles + 1):
-        log.line(f"STEP 4.{i} — POWER-CYCLE the timer now (pull batteries ~15s, reinsert). "
-                 "Phone still OFF, app still closed.")
-        await ask(f"  press Enter after power-cycle {i}/{cycles}... ")
+        log.line(f"STEP 4.{i} — POWER-CYCLE the timer (pull batteries ~15s, reinsert). Keep the "
+                 "phone's Bluetooth OFF (it can hold the device), then WAIT ~10s for the timer "
+                 "to boot + start advertising before continuing.")
+        await ask(f"  press Enter ~10s after power-cycle {i}/{cycles}... ")
         res = await _spawn_verify(key, log)
         ok = bool(res.get("decoded") and res.get("watering") and res.get("stopped_idle"))
         log.line(f"  cycle {i} FRESH-PROCESS verify -> {res}  => {'OK' if ok else 'FAIL'}")
