@@ -17,7 +17,10 @@ reads status back for confirmation.
     python cli.py register [email]    # discover + save a NEW (already-enrolled) timer
                                       #   --name NAME  --device-mac MAC  --show-key
     python cli.py provision [email]   # enroll a FACTORY-FRESH timer app-free (writes the
-                                      #   key onto it), then save to config.json
+                                      #   account key onto it), then save to config.json
+    python cli.py provision --self-key    # ...using our OWN generated key (no Orbit account;
+                                          #   app won't control it). Key saved to secrets/.
+    python cli.py provision --key=<hex>   # ...using a key you supply
 
 With multiple timers in config.json, pick one with --device (name or 0-based index);
 the default is the first device:
@@ -113,6 +116,32 @@ async def cmd_login(email=None, *, show_key=False):
           "key. Address resolution + config writing arrive in a later phase.)")
 
 
+def _stash_key(key, mac, path):
+    """Append a self-generated key to the (git-ignored) secrets stash so it's never lost."""
+    import os
+    from datetime import datetime
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(f"\n## self-key {datetime.now().isoformat(timespec='seconds')}\n"
+                f"- device_mac: {mac or '(pending)'}\n- network_key: {key}\n")
+
+
+def _parse_key_flags(args):
+    """Parse --self-key (bool) and --key=HEX / --key HEX. Returns (self_key, key)."""
+    self_key, key, i = False, None, 0
+    while i < len(args):
+        x = args[i]
+        if x == "--self-key":
+            self_key = True; i += 1
+        elif x == "--key":
+            key = args[i + 1] if i + 1 < len(args) else None; i += 2
+        elif x.startswith("--key="):
+            key = x.split("=", 1)[1]; i += 1
+        else:
+            i += 1
+    return self_key, key
+
+
 def _choose_device(devices, choose_fn=input):
     """Print a numbered list of account devices and return the chosen one (or None on
     blank/invalid input). choose_fn is injectable so this stays testable."""
@@ -126,61 +155,87 @@ def _choose_device(devices, choose_fn=input):
 
 
 async def cmd_register(email=None, *, name=None, want_mac=None, show_key=False,
-                       path="config.json", ask_prompt=True, choose_fn=input, provision=False):
-    """Discover a NEW timer and save it to config.json — one command, no hand-editing.
+                       path="config.json", ask_prompt=True, choose_fn=input, provision=False,
+                       self_key=False, provided_key=None, secrets_path=None):
+    """Discover/enroll a timer and save it to config.json — one command, no hand-editing.
 
-    Key: reuse the account key already in config.json (adding another timer on the
-    same account needs NO cloud login); only log in when there's no key yet (or an
-    email is given). Then: prompt to release the phone -> catch the timer's live
-    advertisement -> read its MAC + status back -> write config -> confirm.
+    Key modes:
+      * default (Orbit) — reuse the account key in config.json, else one cloud login; the
+                          Orbit app and our tools share this key.
+      * --self-key      — (provision only) generate our OWN random key; no Orbit account,
+                          only our tools control the device. Key is stashed to secrets/.
+      * --key HEX       — (provision only) use a key you supply.
 
-    provision=True enrolls a FACTORY-FRESH device app-free: it writes the account key
-    onto the device (6c76) first, instead of just catching an already-enrolled one.
+    provision=True enrolls a FACTORY-FRESH device app-free (writes the key to 6c76 first).
     """
     import getpass
+    import os
 
     import onboarding
 
-    key = None if email else onboarding.key_from_existing_config(path)
+    key = None
     stations = 4
-    if key:
-        print(f"reusing the account key from {path} (...{key[-4:]}) — no cloud login needed.")
-    else:
-        if not email:
-            email = input("Orbit account email: ").strip()
-        print(f"no saved key at {path} — logging in to Orbit as {email}…")
-        password = getpass.getpass("Orbit password (hidden): ")
+    key_source = "orbit"
+
+    if self_key or provided_key:
+        if not provision:
+            print("self-key / --key only applies to `provision` on a factory-fresh device.")
+            return
+        key_source = "self"
+        key = provided_key or os.urandom(16).hex()
+        if not provided_key:
+            print(f"generated a new self-key: {key}")
+        # SAFETY: this key exists ONLY here (no cloud to re-fetch) — persist it immediately.
+        sp = secrets_path or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "secrets", "generated_keys.md")
         try:
-            devices = await onboarding.cloud_fetch(email, password)
-        except onboarding.MFARequired as e:
-            print(f"cloud login needs multi-factor auth, which this flow can't complete: {e}")
-            return
-        except onboarding.AuthError as e:
-            print(f"cloud login failed — {e}")
-            return
-        except onboarding.CloudError as e:
-            print(f"cloud login failed: {e}")
-            return
-        controllable = [d for d in devices if d.get("network_key")]
-        if not controllable:
-            print("no controllable devices with a BLE key on this account.")
-            return
-        if want_mac:
-            chosen = next((d for d in controllable
-                           if (d.get("mac") or "").upper() == want_mac.upper()), None)
-            if not chosen:
-                print(f"no device with MAC {want_mac} on the account.")
-                return
-        elif len(controllable) == 1:
-            chosen = controllable[0]
+            _stash_key(key, want_mac, sp)
+            print(f"  stashed the key to {sp}")
+        except Exception as e:
+            print(f"  WARNING: could not stash key ({e}) — SAVE IT NOW yourself: {key}")
+        print("  ⚠️  SELF-KEY MODE: back up that key. Lose it and the device needs a factory "
+              "reset; the Orbit app will NOT control this device.")
+        name = name or "B-Hyve XD (self-key)"
+    else:
+        key = None if email else onboarding.key_from_existing_config(path)
+        if key:
+            print(f"reusing the account key from {path} (...{key[-4:]}) — no cloud login needed.")
         else:
-            chosen = _choose_device(controllable, choose_fn)
-            if chosen is None:
-                print("no device selected — nothing registered.")
+            if not email:
+                email = input("Orbit account email: ").strip()
+            print(f"no saved key at {path} — logging in to Orbit as {email}…")
+            password = getpass.getpass("Orbit password (hidden): ")
+            try:
+                devices = await onboarding.cloud_fetch(email, password)
+            except onboarding.MFARequired as e:
+                print(f"cloud login needs multi-factor auth, which this flow can't complete: {e}")
                 return
-        key, want_mac = chosen["network_key"], chosen.get("mac")
-        stations = int(chosen.get("stations") or 4)
-        name = name or chosen.get("name")
+            except onboarding.AuthError as e:
+                print(f"cloud login failed — {e}")
+                return
+            except onboarding.CloudError as e:
+                print(f"cloud login failed: {e}")
+                return
+            controllable = [d for d in devices if d.get("network_key")]
+            if not controllable:
+                print("no controllable devices with a BLE key on this account.")
+                return
+            if want_mac:
+                chosen = next((d for d in controllable
+                               if (d.get("mac") or "").upper() == want_mac.upper()), None)
+                if not chosen:
+                    print(f"no device with MAC {want_mac} on the account.")
+                    return
+            elif len(controllable) == 1:
+                chosen = controllable[0]
+            else:
+                chosen = _choose_device(controllable, choose_fn)
+                if chosen is None:
+                    print("no device selected — nothing registered.")
+                    return
+            key, want_mac = chosen["network_key"], chosen.get("mac")
+            stations = int(chosen.get("stations") or 4)
+            name = name or chosen.get("name")
 
     if ask_prompt:
         if provision:
@@ -197,8 +252,8 @@ async def cmd_register(email=None, *, name=None, want_mac=None, show_key=False,
         print(f"\n{'provision' if provision else 'register'} failed: {e}")
         return
 
-    device = {"name": name or "B-Hyve XD", "address": address,
-              "network_key": key, "mac": mac, "stations": stations}
+    device = {"name": name or "B-Hyve XD", "address": address, "network_key": key,
+              "mac": mac, "stations": stations, "key_source": key_source}
     onboarding.write_config(path, device)
     keyview = key if show_key else f"****{key[-4:]}"
     print(f"\n✓ registered '{device['name']}'  mac={mac}  address={address}  key={keyview}")
@@ -289,7 +344,9 @@ def main():
         asyncio.run(cmd_register(email, name=name, want_mac=want_mac, show_key=show_key))
     elif cmd == "provision":
         email, name, want_mac, show_key = _parse_register(a[1:])
-        asyncio.run(cmd_register(email, name=name, want_mac=want_mac, show_key=show_key, provision=True))
+        self_key, provided_key = _parse_key_flags(a[1:])
+        asyncio.run(cmd_register(email, name=name, want_mac=want_mac, show_key=show_key,
+                                 provision=True, self_key=self_key, provided_key=provided_key))
     else:
         print(__doc__)
 
