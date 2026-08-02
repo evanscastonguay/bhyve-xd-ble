@@ -63,6 +63,7 @@ class FakeTimer:
     def __init__(self, key_hex: str | None = TEST_KEY, mac: str = TEST_MAC, *, clock: int = 1_751_000_000):
         self.key = bytes.fromhex(key_hex) if key_hex else None   # None = factory-fresh (unprovisioned)
         self._provision_write = None                              # last value written to 6c76
+        self.persisted = key_hex is not None                     # key durably saved? set by field 94
         self.mac_bytes = bytes.fromhex(mac.replace(":", ""))
         self.clock = clock
         self.watering = False
@@ -123,6 +124,8 @@ class FakeTimer:
                 self._actuate(v)
             elif fn == 15:                              # getDeviceStatus -> reply
                 self._emit_status()
+            elif fn == 94:                              # station config -> finalizes enrollment
+                self.persisted = True
             # fields 18 (time string), 45 (battery), 20/22/120 (setup) are accepted + ignored
 
     def _actuate(self, timer_mode: bytes) -> None:
@@ -889,6 +892,20 @@ def test_provision_device_writes_key_then_verifies():
     assert t._provision_write[2:] == bytes.fromhex(TEST_KEY)
     assert addr == "UUID-FRESH" and mac == TEST_MAC
     assert st.device_mac == TEST_MAC                        # verified live after the write
+
+
+def test_provision_device_persists_via_station_config():
+    """The fix: provision_device must send the app's enrollment setup (incl. the station-
+    config, field 94) that PERSISTS the key — not just a plain arm(). The fake only marks
+    itself 'persisted' when it receives field 94."""
+    import onboarding as O
+    t = FakeTimer(mac=TEST_MAC, key_hex=None)          # factory-fresh, not persisted
+    assert t.persisted is False
+    with fake_catch_ble([_adv("UUID-FRESH", "", -55)], lambda _a: t):
+        addr, mac, st = asyncio.run(O.provision_device(TEST_KEY, scan_timeout=2.0))
+    assert t.key == bytes.fromhex(TEST_KEY)
+    assert t.persisted is True                          # finalize step was sent
+    assert mac == TEST_MAC
 
 
 def test_provision_device_times_out_when_no_bhyve():

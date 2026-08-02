@@ -3,8 +3,14 @@
 _Investigation only. No device reset, no implementation, until the B0 decision below.
 Written 2026-08-01 from first principles + what this project already established._
 
-> **BUILT & LIVE-VERIFIED 2026-08-01 — `provision_device` enrolled a factory-reset device
-> app-free (wrote key to `6c76`, verified by read-back, Orbit app never opened).**
+> **BUILT; PERSISTENCE FIX IN; LIVE-UNCONFIRMED (2026-08-01).** Correction to an earlier
+> over-claim: `provision_device`'s first live run decoded *in-session* but the key **did
+> not persist** across a reboot — a plain `arm()` after the `6c76` write is not enough.
+> A second capture (full app enrollment) was decrypted with the account key; the app
+> sends extra setup messages the finalize the enrollment — notably a **station-config
+> (protobuf field 94)** plus fields 10/57 and a stop (field 14). `provision_setup()` now
+> replays that captured sequence. **Still needs one factory reset to confirm persistence
+> on hardware.**
 >
 > **RESOLVED 2026-08-01 — B1 capture done → B2 analysed → B3 = GO (feasible, simple).**
 > A live HCI capture (PacketLogger) of the official app enrolling a factory-reset device
