@@ -39,7 +39,7 @@ app never opened** — the last step of that is proven, not just claimed.
   confirmed keyless first, provisioned, and **survived 3 power-cycles**, each re-verified in
   a fresh process — the same bar the Orbit-key path met.
 
-Full detail + evidence: `PROJECT_STATUS.md`, `SPIKE_provisioning.md`, `provision_proof.py`.
+Full detail + evidence: `docs/SPIKE_provisioning.md`, `provision_proof.py`, `docs/archive/PROJECT_STATUS.md`.
 
 ## The one thing that makes this work
 
@@ -136,7 +136,7 @@ why the next step is running the server on an always-on Linux box near the timer
 
 > On-device (standalone) scheduling — storing the program on the timer so it runs without the
 > Mac — is **not enabled**: the timer accepts and activates a program byte-identically to the
-> Orbit app, but never autonomously executed one in testing (see `SPIKE_schedule.md`). That code
+> Orbit app, but never autonomously executed one in testing (see `docs/SPIKE_schedule.md`). That code
 > stays in the repo, tested but dormant, pending confirmation that this unit runs schedules at all.
 
 ## Register a new timer
@@ -182,7 +182,7 @@ full display lights up), turn the **phone's Bluetooth OFF**, then run it. It wri
 account key to the device's provisioning characteristic (`6c76`), verifies with a normal
 read-back, and saves `config.json`. The account key comes from your existing config or a
 one-time cloud login, same as `register`. (Mechanism reverse-engineered in
-`SPIKE_provisioning.md`.)
+`docs/SPIKE_provisioning.md`.)
 
 > **The one precondition:** turn your **phone's Bluetooth OFF** before pressing Enter. A
 > B-Hyve accepts only one BLE connection and won't advertise while the phone holds it —
@@ -195,8 +195,6 @@ click **＋ Add timer** — a wizard runs the same flow (reuse the saved key or 
 once, catch the timer, save it) with live status and error hints. Same phone-Bluetooth-OFF
 precondition.
 
-For hands-on debugging (repeated start/stop on one held connection, with a timestamped
-log), `bhyve_lab.py` offers an interactive menu built on the same discovery code.
 
 Library use:
 
@@ -213,12 +211,11 @@ async with dev.session() as s:
 
 ## Testing
 
-Two layers, both hardware-free and repeatable:
+Hardware-free and repeatable:
 
 ```bash
-python selftest_offline.py                       # 55 offline byte/logic checks
 pip install -r requirements-dev.txt
-python -m pytest test_e2e.py -q                  # 37 end-to-end tests (~0.6s)
+python -m pytest test_e2e.py -q                  # 131 tests, no device needed (~1s)
 ```
 
 `test_e2e.py` runs every operation against a **fake B-Hyve** (`FakeTimer`) that
@@ -252,8 +249,10 @@ the single serializer. Change the protocol once, in one place.
 | `server.py` | thin FastAPI REST API over `bhyve_xd` |
 | `index.html` | web UI (calls the REST API) |
 | `onboarding.py` | cloud login (`cloud_fetch`), discovery (`catch_device`), and config write (`write_config`) — powers `cli.py register` |
-| `bhyve_lab.py` | interactive live-control diagnostic (reuses `onboarding.catch_device_session`) |
-| `selftest_offline.py` | offline byte checks (no device) — validates message builders |
+| `schedule.py` / `scheduler.py` | host-scheduling store + due-rule/next-run logic |
+| `schedule_device.py` | on-device schedule codec (dormant — see `docs/SPIKE_schedule.md`) |
+| `provision_proof.py` | live hardware proof of durable provisioning |
+| `docs/` | protocol reference (`SPIKE_*`), `plans/`, and `archive/` |
 | `test_e2e.py` | end-to-end tests against a fake device (no hardware) — every operation |
 | `config.example.json` | copy to `config.json`, fill in address + network key |
 
