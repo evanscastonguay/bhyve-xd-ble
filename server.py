@@ -15,20 +15,44 @@ call times out.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import tempfile
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+import onboarding
 from bhyve_xd import BHyveXD
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.environ.get("BHYVE_CONFIG", os.path.join(HERE, "config.json"))
 INDEX = os.path.join(HERE, "index.html")
 
-app = FastAPI(title="B-Hyve XD Local API", version="1.1.0")
+app = FastAPI(title="B-Hyve XD Local API", version="1.2.0")
 _ble_lock = asyncio.Lock()   # the radio does one thing at a time
+_job = None                  # the single in-flight onboarding job (or None)
+
+
+class _OnboardJob:
+    """One onboarding run: drives onboarding.onboard_flow, accumulating its Step events
+    (so the SSE stream is re-attachable) and holding the human gate."""
+    def __init__(self):
+        self.gate = onboarding.OnboardGate()
+        self.events = []
+        self.done = False
+        self.task = None
+
+    async def run(self, params):
+        try:
+            async for ev in onboarding.onboard_flow(params, self.gate):
+                self.events.append(ev)
+        except Exception as err:  # noqa: BLE001 — surface as a failed step, never crash the server
+            self.events.append({"id": "error", "title": "Onboarding error",
+                                "instruction": str(err), "state": "failed", "verified": False})
+        finally:
+            self.done = True
 
 
 def _coerce_device(device):
@@ -46,6 +70,8 @@ def _device(device=None) -> BHyveXD:
 async def _run(coro_fn, device=None):
     """Serialize BLE access and translate errors to HTTP. coro_fn takes the
     device and returns a DeviceStatus."""
+    if _job is not None and not _job.done:
+        raise HTTPException(503, "onboarding in progress — try again once it finishes")
     dev = _device(device)
     async with _ble_lock:
         try:
@@ -64,6 +90,89 @@ class OnboardBody(BaseModel):
     email: str | None = Field(default=None, description="Orbit email (only if no saved key yet)")
     password: str | None = Field(default=None, description="Orbit password (never stored)")
     scan_timeout: float = Field(default=60, gt=0, le=180, description="seconds to wait for the timer")
+
+
+class OnboardStartBody(BaseModel):
+    mode: str = Field(default="orbit", description="'orbit' (account key) or 'self' (own key)")
+    email: str | None = None
+    password: str | None = None
+    name: str | None = None
+    device_mac: str | None = None
+
+
+class OnboardContinueBody(BaseModel):
+    choice: str | None = Field(default=None, description="for a fallback_choice step: "
+                               "'orbit_app_first' | 'self_key'")
+
+
+@app.post("/api/onboard/start")
+async def onboard_start(body: OnboardStartBody):
+    """Launch the guided onboarding flow (one at a time). Progress is read from
+    GET /api/onboard/stream; human steps are advanced with POST /api/onboard/continue."""
+    global _job
+    if _job is not None and not _job.done:
+        raise HTTPException(409, "an onboarding session is already running")
+    _job = _OnboardJob()
+    params = {"mode": body.mode, "email": body.email, "password": body.password,
+              "name": body.name, "device_mac": body.device_mac, "path": CONFIG,
+              "secrets_path": os.path.join(HERE, "secrets", "generated_keys.md")}
+    _job.task = asyncio.create_task(_job.run(params))
+    return {"ok": True, "mode": body.mode}
+
+
+@app.post("/api/onboard/continue")
+async def onboard_continue(body: OnboardContinueBody):
+    """Advance a waiting_user step (e.g. after resetting the timer, or choosing a fallback)."""
+    if _job is None:
+        raise HTTPException(409, "no onboarding session")
+    _job.gate.resume(body.choice)
+    return {"ok": True}
+
+
+@app.get("/api/onboard/stream")
+async def onboard_stream():
+    """SSE stream of onboarding Step events. Re-attachable: replays events so far, then
+    follows new ones until the flow finishes."""
+    async def gen():
+        if _job is None:
+            yield f"data: {json.dumps({'id': 'idle', 'state': 'none'})}\n\n"
+            return
+        i = 0
+        while True:
+            while i < len(_job.events):
+                yield f"data: {json.dumps(_job.events[i])}\n\n"
+                i += 1
+            if _job.done:
+                break
+            await asyncio.sleep(0.3)
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.delete("/api/devices/{index}")
+async def remove_device(index: int):
+    """Remove a configured timer (the UI confirms first). Atomic rewrite of config.json."""
+    with open(CONFIG) as f:
+        cfg = json.load(f)
+    devs = cfg.get("devices", [])
+    if not 0 <= index < len(devs):
+        raise HTTPException(404, f"no device at index {index}")
+    removed = devs.pop(index)
+    directory = os.path.dirname(os.path.abspath(CONFIG))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".config.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, CONFIG)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return {"removed": removed.get("name"),
+            "devices": [{"index": i, "name": d.get("name"), "stations": int(d.get("stations") or 4)}
+                        for i, d in enumerate(devs)]}
 
 
 @app.get("/")

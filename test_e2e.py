@@ -404,6 +404,86 @@ def test_api_status_selects_device(monkeypatch):
     assert seen["device"] == "New Timer"
 
 
+def test_api_remove_device(monkeypatch, tmp_path):
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [{"name": "A", "mac": "AA"}, {"name": "B", "mac": "BB"}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    res = asyncio.run(server.remove_device(0))
+    assert res["removed"] == "A"
+    assert [d["name"] for d in res["devices"]] == ["B"]
+    assert [d["name"] for d in json.load(open(cfg))["devices"]] == ["B"]   # persisted
+
+
+def test_api_remove_device_bad_index(monkeypatch, tmp_path):
+    import json
+    from fastapi import HTTPException
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [{"name": "A"}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.remove_device(5))
+    assert exc.value.status_code == 404
+
+
+def test_api_onboard_start_stream_continue(monkeypatch, tmp_path):
+    """start launches the flow; the events accumulate; continue advances a waiting_user
+    step; the SSE stream projects the events."""
+    import server
+    import onboarding as O
+    monkeypatch.setattr(server, "CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+
+    async def fake_flow(params, gate):
+        yield {"id": "await_reset", "title": "Reset", "instruction": "reset it",
+               "state": "waiting_user", "verified": False}
+        await gate.wait()
+        yield {"id": "save", "title": "Saved", "instruction": "done",
+               "state": "done", "verified": True}
+
+    monkeypatch.setattr(O, "onboard_flow", fake_flow)
+
+    async def scenario():
+        r = await server.onboard_start(server.OnboardStartBody(mode="self"))
+        assert r["ok"] is True
+        for _ in range(20):                          # let the task reach the waiting_user yield
+            await asyncio.sleep(0)
+            if server._job.events:
+                break
+        assert server._job.events[-1]["id"] == "await_reset"
+        await server.onboard_continue(server.OnboardContinueBody())
+        await server._job.task
+        assert server._job.events[-1]["id"] == "save"
+        # SSE stream replays the events to a (re)connecting client
+        resp = await server.onboard_stream()
+        body = ""
+        async for chunk in resp.body_iterator:
+            body += chunk if isinstance(chunk, str) else chunk.decode()
+        assert "await_reset" in body and "save" in body
+
+    asyncio.run(scenario())
+
+
+def test_api_run_blocks_during_onboarding(monkeypatch):
+    """Control endpoints must refuse (503) while an onboarding job is running, to avoid
+    two BLE operations on the one radio."""
+    from fastapi import HTTPException
+    import server
+
+    class _FakeJob:
+        done = False
+    monkeypatch.setattr(server, "_job", _FakeJob(), raising=False)
+
+    async def noop(_d):
+        return None
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server._run(noop))
+    assert exc.value.status_code == 503
+
+
 def test_api_onboard_state_reports_saved_key(monkeypatch, tmp_path):
     import json
     import server
