@@ -1910,6 +1910,46 @@ def test_schedule_write_unknown_mac_raises(tmp_path):
         S.write_schedules(p, "AA:BB:CC:DD:EE:FF", [{"valve": 1, "start": "06:00", "days": [0], "minutes": 5}])
 
 
+# --- P2: schedule REST (GET/PUT per timer; validate; key never in a response) ---
+def _server_with_timer(monkeypatch, tmp_path):
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [
+        {"name": "A", "mac": TEST_MAC, "network_key": TEST_KEY, "stations": 4}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    return server
+
+
+def test_api_schedules_get_put_roundtrip(monkeypatch, tmp_path):
+    import json
+    server = _server_with_timer(monkeypatch, tmp_path)
+    assert asyncio.run(server.get_schedules(0))["schedules"] == []
+    body = server.SchedulesBody(rules=[{"valve": 2, "start": "06:00", "days": [0, 2, 4], "minutes": 5}])
+    r = asyncio.run(server.put_schedules(0, body))
+    assert r["schedules"][0]["valve"] == 2 and r["schedules"][0]["enabled"] is True
+    assert asyncio.run(server.get_schedules(0))["schedules"][0]["start"] == "06:00"
+    assert TEST_KEY not in json.dumps(r)                      # key never in the response
+
+
+def test_api_schedules_bad_rule_400(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+    server = _server_with_timer(monkeypatch, tmp_path)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.put_schedules(0, server.SchedulesBody(
+            rules=[{"valve": 9, "start": "06:00", "days": [0], "minutes": 5}])))
+    assert exc.value.status_code == 400
+    assert asyncio.run(server.get_schedules(0))["schedules"] == []   # nothing persisted
+
+
+def test_api_schedules_bad_index_404(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+    server = _server_with_timer(monkeypatch, tmp_path)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.get_schedules(9))
+    assert exc.value.status_code == 404
+
+
 def test_resolve_linux_returns_mac():
     import onboarding as O
     got = asyncio.run(O.resolve_address(TEST_MAC, TEST_KEY, platform_name="linux"))
