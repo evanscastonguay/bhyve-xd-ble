@@ -114,6 +114,31 @@ python cli.py status --device "New Timer"
 python cli.py start 1 300 --device 1
 ```
 
+## Scheduling (host-driven)
+
+Author per-valve watering rules in the web UI (**🗓 Schedule** tab): valve · start time · days ·
+duration. Then choose how they run:
+
+- **On this Mac** — the server fires each valve at its time over Bluetooth (the device auto-stops
+  after the duration). **Verified end-to-end.** A failed/timed-out fire is retried on the next
+  tick; a rule fires once per day even if a tick is late (bounded catch-up). The Schedule tab
+  shows the next run and whether the last one succeeded (`GET /api/scheduling`).
+- **Off** — rules are saved but nothing runs them.
+
+**This runs only while the server (and Mac) is up and in Bluetooth range.** Keep it awake:
+
+```bash
+caffeinate -s uvicorn server:app --host 0.0.0.0 --port 8000   # macOS: don't sleep while serving
+```
+
+If the Mac sleeps, is off, or is out of range at a scheduled time, that run is missed — which is
+why the next step is running the server on an always-on Linux box near the timer.
+
+> On-device (standalone) scheduling — storing the program on the timer so it runs without the
+> Mac — is **not enabled**: the timer accepts and activates a program byte-identically to the
+> Orbit app, but never autonomously executed one in testing (see `SPIKE_schedule.md`). That code
+> stays in the repo, tested but dormant, pending confirmation that this unit runs schedules at all.
+
 ## Register a new timer
 
 `cli.py register` turns a new timer into a working `config.json` entry in one command —
