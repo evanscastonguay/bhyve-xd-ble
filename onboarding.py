@@ -316,17 +316,9 @@ def key_from_existing_config(path: str) -> str | None:
     return None
 
 
-def write_config(path: str, device: dict) -> dict:
-    """Merge `device` into the `devices` list of `path` and write it back atomically.
-
-    device: {name, address, network_key, mac, stations, tz_offset_sec?}. Matching is
-    by `mac` (case-insensitive), falling back to `address`; a match is updated in
-    place (preserving any extra fields already there), otherwise the device is
-    appended. Returns the full config dict written.
-
-    A missing/empty file starts a fresh config. A file that exists but is not valid
-    JSON raises ValueError and is left untouched (never clobbered).
-    """
+def _load_config(path: str) -> dict:
+    """Load the config dict from `path`, or a fresh {'devices': []} if missing/empty.
+    A file that exists but is not valid JSON raises ValueError (never clobbered)."""
     config: dict = {"devices": []}
     if os.path.exists(path):
         text = open(path).read().strip()
@@ -335,6 +327,40 @@ def write_config(path: str, device: dict) -> dict:
                 config = json.loads(text)
             except json.JSONDecodeError as err:
                 raise ValueError(f"{path} is not valid JSON — refusing to overwrite") from err
+    return config
+
+
+def _atomic_write_config(path: str, config: dict) -> dict:
+    """Write `config` to `path` atomically (write temp + os.replace). Returns config."""
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".config.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(config, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)   # atomic on POSIX
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return config
+
+
+def write_config(path: str, device: dict) -> dict:
+    """Merge `device` into the `devices` list of `path` and write it back atomically.
+
+    device: {name, address, network_key, mac, stations, tz_offset_sec?}. Matching is
+    by `mac` (case-insensitive), falling back to `address`; a match is updated in
+    place (preserving any extra fields already there), otherwise the device is
+    appended. Preserves any `account` block already present. Returns the full config
+    dict written.
+
+    A missing/empty file starts a fresh config. A file that exists but is not valid
+    JSON raises ValueError and is left untouched (never clobbered).
+    """
+    config = _load_config(path)
     devices = config.setdefault("devices", [])
 
     want_mac = (device.get("mac") or "").upper()
@@ -351,20 +377,32 @@ def write_config(path: str, device: dict) -> dict:
     else:
         devices[idx] = {**devices[idx], **device}   # update, keep any extra existing fields
 
-    directory = os.path.dirname(os.path.abspath(path))
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".config.", suffix=".json")
+    return _atomic_write_config(path, config)
+
+
+def read_account(path: str) -> dict | None:
+    """Return the remembered Orbit account {'email', 'network_key'} from `path`, or None.
+
+    The account is per-install (not per-timer): its network key is the shared account/mesh
+    key, reused to add further timers without another login. The password is NEVER stored."""
     try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(config, f, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)   # atomic on POSIX
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return config
+        acct = _load_config(path).get("account")
+    except (ValueError, OSError):
+        return None
+    if isinstance(acct, dict) and acct.get("email") and acct.get("network_key"):
+        return {"email": acct["email"], "network_key": acct["network_key"]}
+    return None
+
+
+def write_account(path: str, email: str, network_key: str) -> dict:
+    """Persist the Orbit account (email + shared network key) into the `account` block of
+    `path`, atomically, preserving the `devices` list. NEVER stores the password.
+
+    A file that exists but is not valid JSON raises ValueError and is left untouched."""
+    config = _load_config(path)
+    config.setdefault("devices", [])
+    config["account"] = {"email": email, "network_key": network_key}
+    return _atomic_write_config(path, config)
 
 
 # --------------------------------------------------------------------------- #
