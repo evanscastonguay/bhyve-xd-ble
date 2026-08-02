@@ -495,6 +495,87 @@ def test_api_onboard_state_reports_saved_key(monkeypatch, tmp_path):
     assert asyncio.run(server.onboard_state())["has_key"] is False
 
 
+# --- P2: REST account layer (login/list/forget; key never in a response body) ---
+def _multi_account_cloud():
+    async def fake_cloud(email, pw):
+        return [
+            {"name": "zone1-4 timer", "mac": "44:67:55:D8:78:00", "network_key": TEST_KEY, "stations": 4},
+            {"name": "Smart Hose Tap Timer", "mac": "44:67:55:D8:71:B0", "network_key": TEST_KEY, "stations": 4},
+        ]
+    return fake_cloud
+
+
+def test_account_login_caches_persists_and_hides_key(monkeypatch, tmp_path):
+    import json
+    import server
+    import onboarding as O
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [                       # first timer already added
+        {"name": "zone1-4 timer", "mac": "44:67:55:D8:78:00", "network_key": TEST_KEY, "stations": 4}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_account_session", None, raising=False)
+    monkeypatch.setattr(O, "cloud_fetch", _multi_account_cloud())
+
+    res = asyncio.run(server.account_login(server.AccountLoginBody(email="me@x.com", password="pw")))
+    assert res["email"] == "me@x.com"
+    assert {t["mac"] for t in res["timers"]} == {"44:67:55:D8:78:00", "44:67:55:D8:71:B0"}
+    added = {t["mac"]: t["added"] for t in res["timers"]}
+    assert added["44:67:55:D8:78:00"] is True and added["44:67:55:D8:71:B0"] is False
+    assert TEST_KEY not in json.dumps(res)                        # key never in the body
+    acct = O.read_account(str(cfg))                               # persisted {email,key}
+    assert acct == {"email": "me@x.com", "network_key": TEST_KEY}
+    assert server._account_session["email"] == "me@x.com"         # cached in memory
+
+
+def test_account_login_bad_creds_401(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+    import server
+    import onboarding as O
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"devices":[]}')
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_account_session", None, raising=False)
+
+    async def bad(email, pw):
+        raise O.AuthError("bad creds")
+
+    monkeypatch.setattr(O, "cloud_fetch", bad)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.account_login(server.AccountLoginBody(email="me@x.com", password="wrong")))
+    assert exc.value.status_code == 401
+    assert O.read_account(str(cfg)) is None                       # nothing persisted on failure
+
+
+def test_account_get_reflects_state(monkeypatch, tmp_path):
+    import server
+    import onboarding as O
+    cfg = tmp_path / "config.json"
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_account_session", None, raising=False)
+    st = asyncio.run(server.account_get())
+    assert st["signed_in"] is False and st["has_saved_key"] is False
+    O.write_account(str(cfg), "me@x.com", TEST_KEY)
+    st = asyncio.run(server.account_get())
+    assert st["signed_in"] is False and st["has_saved_key"] is True and st["email"] == "me@x.com"
+
+
+def test_account_forget_clears_memory_and_persisted(monkeypatch, tmp_path):
+    import server
+    import onboarding as O
+    cfg = tmp_path / "config.json"
+    O.write_account(str(cfg), "me@x.com", TEST_KEY)
+    O.write_config(str(cfg), {"name": "A", "address": "UUID-A", "network_key": TEST_KEY,
+                              "mac": TEST_MAC, "stations": 4})
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_account_session",
+                        {"email": "me@x.com", "key": TEST_KEY, "devices": []}, raising=False)
+    asyncio.run(server.account_forget())
+    assert server._account_session is None
+    assert O.read_account(str(cfg)) is None                       # account block gone
+    import json
+    assert json.loads(cfg.read_text())["devices"][0]["mac"] == TEST_MAC  # devices untouched
+
+
 def test_api_onboard_register_reuses_key(monkeypatch, tmp_path):
     """The web register endpoint reuses the saved key (no cloud), catches the timer,
     writes config, and does NOT leak the key back to the browser."""
