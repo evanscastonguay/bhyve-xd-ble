@@ -276,7 +276,7 @@ const VIEWS=["empty","control","add","account"];
 function showView(name){ for(const v of VIEWS) $("#v_"+v).style.display=(v===name)?"block":"none"; }
 
 function banner(msg,cls){ const b=$("#banner");
-  if(!msg){ b.style.display="none"; b.className=""; b.innerHTML=""; return; }
+  if(!msg){ b.className=""; b.innerHTML=""; return; }   // hide via class only (CSS #banner{display:none}); never inline style, which would override the .err/.ok reveal
   b.className=cls||"ok"; b.textContent=msg; }
 function confirmBanner(msg,onYes){ const b=$("#banner"); b.className="err";
   b.innerHTML=`${esc(msg)} <button class="bon" id="cf_yes" style="margin-left:10px;padding:4px 10px">Yes</button>`
