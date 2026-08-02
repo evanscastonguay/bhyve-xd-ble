@@ -128,18 +128,16 @@ default. Multiple timers on one account share one account key.
   tested; the finalize bytes are **HT34 4-station specific**; the device is enrolled for
   **local control only** (not registered in the Orbit cloud/app); provisioning takes ~2–3
   min (the reconnect).
-- **Fully cloud-free provisioning (self-generated key)** — **BUILT + durability
-  DEMONSTRATED on hardware (2026-08-02).** `cli.py provision --self-key` (or `--key <hex>`
-  BYO) mints/writes our own 16-byte key, stashes it to git-ignored `secrets/`, labels the
-  device `key_source: "self"`, warns it's the sole copy. Rests on the `6c76` write being
-  plaintext + unauthenticated. **Result:** a timer provisioned with our OWN key (no Orbit
-  account, app never opened) **survived multiple power-cycles and is controllable via
-  `config.json`** (`cli.py status` decoded it after reboots). **Caveat:** the automated
-  `provision_proof.py --self-key` run did *not* score a clean PASS — its per-cycle verify
-  was **confounded by the phone holding the device** (a BLE connect is key-independent, so
-  the phone can grab a self-keyed device and stop it advertising → "0 B-Hyve"). The verify
-  is now **hardened** (retries + a phone-off hint); a confound-free harness PASS is the only
-  thing still outstanding. Config records `key_source` (`orbit` = shared with app; `self` = ours).
+- **Fully cloud-free provisioning (self-generated key) — PROVEN (2026-08-02).** `cli.py
+  provision --self-key` (or `--key <hex>` BYO) mints/writes our own 16-byte key, stashes it
+  to git-ignored `secrets/`, labels the device `key_source: "self"`, warns it's the sole
+  copy. Rests on the `6c76` write being plaintext + unauthenticated. **`provision_proof.py
+  --self-key` scored a clean, confound-free PASS:** negative control confirmed the device
+  KEYLESS → provisioned with our OWN key (no Orbit account, app never opened) → **survived 3
+  power-cycles**, each re-verified in a fresh process (decoded + zone start/stop). So **both
+  key modes now have an airtight on-hardware proof.** (Earlier `0 B-Hyve` aborts were the
+  phone holding the device / dead-battery power-off — verify is hardened with retries.)
+  Config records `key_source` (`orbit` = shared with app; `self` = ours).
 - **Catch-once-and-hold resident server** (`PLAN_catch_and_hold.md`) — deferred; the
   stable UUID made it unnecessary for the current units.
 - **Linux/BlueZ headless host** — addresses by MAC (no rotating-UUID problem); the
