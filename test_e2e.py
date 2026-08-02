@@ -2034,6 +2034,68 @@ def test_api_scheduling_toggle(monkeypatch, tmp_path):
     assert json.loads(cfg.read_text())["host_scheduling"] is True
 
 
+# --- P4b: on-device schedule encoder (pure; matches the replay-proven capture) ---
+def _unwrap(framed):
+    import bhyve_xd as B
+    assert framed[:4] == B.MSG_HEADER
+    return framed[6:-2]                    # strip [hdr4][len][00] ... [crc16]
+
+def _field(proto, num):
+    import bhyve_xd as B
+    for fn, wt, v in B.iter_fields(proto):
+        if fn == num:
+            return v
+    return None
+
+
+def test_encode_set_program_schedule_matches_capture():
+    """Encoding Program A, 06:00, Valve 1 (station 0), 600s reproduces the fields decoded
+    from the app's real capture: programId=1, Interval daily, startTimes=[360], station(0,600)."""
+    import bhyve_xd as B
+    import schedule_device as SD
+    framed = SD.encode_set_program_schedule(SD.PROGRAM_A, [360], [(0, 600)])
+    body = _field(_unwrap(framed), 19)                 # SetProgramSchedule
+    assert _field(body, 1) == 1                         # programId = A
+    assert _field(body, 4) is not None                 # programType = Interval present
+    assert _field(_field(body, 4), 1) == 1             # intervalDays = 1
+    # startTimesMinsFromMidnight (repeated field 8) — collect all
+    starts = [v for fn, wt, v in B.iter_fields(body) if fn == 8]
+    assert starts == [360]                              # 06:00 local, matches capture
+    station = _field(body, 9)
+    assert _field(station, 1) == 0 and _field(station, 2) == 600   # station 0 (Valve 1), 10 min
+    assert _field(body, 10) == 100                      # budgetPercent
+    assert _field(body, 19) == 1                        # basicProgramMode
+
+
+def test_encode_multiple_starts_and_stations():
+    import bhyve_xd as B
+    import schedule_device as SD
+    body = _field(_unwrap(SD.encode_set_program_schedule(2, [360, 1200], [(0, 300), (3, 600)])), 19)
+    assert _field(body, 1) == 2                          # Program B
+    assert [v for fn, _, v in B.iter_fields(body) if fn == 8] == [360, 1200]   # two start times
+    stations = [v for fn, _, v in B.iter_fields(body) if fn == 9]
+    got = [(_field(s, 1), _field(s, 2)) for s in stations]
+    assert got == [(0, 300), (3, 600)]                   # Valve 1 5min, Valve 4 10min (0-indexed)
+
+
+def test_encode_set_active_and_parse_roundtrip():
+    import schedule_device as SD
+    assert SD.program_bit(1) == 1 and SD.program_bit(2) == 2 and SD.program_bit(3) == 4
+    framed = SD.encode_set_active(SD.program_bit(1))
+    body = _field(_unwrap(framed), 20)                   # setActivePrograms
+    assert _field(body, 1) == 1                          # flags = bit0 (Program A)
+    # parse_active_flags reads the device's reply shape (ActivePrograms under field 20)
+    import bhyve_xd as B
+    reply = B._fb(20, B._fv(1, 5))                       # flags = 0b101 (A + C)
+    assert SD.parse_active_flags([reply]) == 5
+
+
+def test_encode_get_active_is_empty_request():
+    import schedule_device as SD
+    body = _field(_unwrap(SD.encode_get_active()), 77)
+    assert body == b""                                   # getActivePrograms takes no args
+
+
 def test_resolve_linux_returns_mac():
     import onboarding as O
     got = asyncio.run(O.resolve_address(TEST_MAC, TEST_KEY, platform_name="linux"))
