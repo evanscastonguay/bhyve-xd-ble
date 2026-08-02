@@ -1950,6 +1950,90 @@ def test_api_schedules_bad_index_404(monkeypatch, tmp_path):
     assert exc.value.status_code == 404
 
 
+# --- P3: host-driven schedule engine (pure decision + gated firing) ------------
+def test_due_rules_matches_day_time_and_enabled():
+    from datetime import datetime
+    import scheduler
+    now = datetime(2026, 8, 3, 6, 30)                 # a Monday, 06:30 -> weekday()==0
+    rules = [
+        {"valve": 1, "start": "06:30", "days": [0], "minutes": 5},           # due
+        {"valve": 2, "start": "06:30", "days": [1], "minutes": 5},           # wrong day
+        {"valve": 3, "start": "06:31", "days": [0], "minutes": 5},           # wrong minute
+        {"valve": 4, "start": "06:30", "days": [0], "minutes": 5, "enabled": False},  # off
+    ]
+    due = scheduler.due_rules(rules, now)
+    assert [r["valve"] for r in due] == [1]
+
+
+def _sched_server(monkeypatch, tmp_path, enabled, rule_now):
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "host_scheduling": enabled,
+        "devices": [{"name": "A", "mac": TEST_MAC, "network_key": TEST_KEY, "stations": 4,
+                     "schedules": [{"valve": 2, "start": rule_now.strftime("%H:%M"),
+                                    "days": [rule_now.weekday()], "minutes": 7}]}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+    monkeypatch.setattr(server, "_fired", set(), raising=False)
+    return server
+
+
+def test_run_due_fires_when_enabled(monkeypatch, tmp_path):
+    from datetime import datetime
+    now = datetime(2026, 8, 3, 6, 30)
+    server = _sched_server(monkeypatch, tmp_path, True, now)
+    calls = []
+    async def fake_fire(i, valve, minutes): calls.append((i, valve, minutes))
+    fired = asyncio.run(server.run_due(now, fake_fire))
+    assert calls == [(0, 2, 7)] and len(fired) == 1
+
+
+def test_run_due_skipped_when_disabled(monkeypatch, tmp_path):
+    from datetime import datetime
+    now = datetime(2026, 8, 3, 6, 30)
+    server = _sched_server(monkeypatch, tmp_path, False, now)   # host_scheduling off
+    calls = []
+    async def fake_fire(i, valve, minutes): calls.append(1)
+    assert asyncio.run(server.run_due(now, fake_fire)) == [] and calls == []
+
+
+def test_run_due_skipped_during_onboarding(monkeypatch, tmp_path):
+    from datetime import datetime
+    now = datetime(2026, 8, 3, 6, 30)
+    server = _sched_server(monkeypatch, tmp_path, True, now)
+    class _Busy:  # a not-done onboarding job holds the radio
+        done = False
+    monkeypatch.setattr(server, "_job", _Busy(), raising=False)
+    calls = []
+    async def fake_fire(i, valve, minutes): calls.append(1)
+    assert asyncio.run(server.run_due(now, fake_fire)) == [] and calls == []
+
+
+def test_run_due_idempotent_within_minute(monkeypatch, tmp_path):
+    from datetime import datetime
+    now = datetime(2026, 8, 3, 6, 30)
+    server = _sched_server(monkeypatch, tmp_path, True, now)
+    calls = []
+    async def fake_fire(i, valve, minutes): calls.append((valve, minutes))
+    asyncio.run(server.run_due(now, fake_fire))
+    asyncio.run(server.run_due(now, fake_fire))       # same minute again
+    assert calls == [(2, 7)]                            # fired only once
+
+
+def test_api_scheduling_toggle(monkeypatch, tmp_path):
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": []}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    assert asyncio.run(server.get_scheduling())["enabled"] is False   # default OFF
+    asyncio.run(server.put_scheduling(server.SchedulingBody(enabled=True)))
+    assert asyncio.run(server.get_scheduling())["enabled"] is True
+    assert json.loads(cfg.read_text())["host_scheduling"] is True
+
+
 def test_resolve_linux_returns_mac():
     import onboarding as O
     got = asyncio.run(O.resolve_address(TEST_MAC, TEST_KEY, platform_name="linux"))

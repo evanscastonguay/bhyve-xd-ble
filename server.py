@@ -18,6 +18,8 @@ import asyncio
 import json
 import os
 import tempfile
+from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -30,7 +32,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.environ.get("BHYVE_CONFIG", os.path.join(HERE, "config.json"))
 INDEX = os.path.join(HERE, "index.html")
 
-app = FastAPI(title="B-Hyve XD Local API", version="1.2.0")
+@asynccontextmanager
+async def _lifespan(app):
+    task = asyncio.create_task(_scheduler_loop())   # host-driven schedule engine
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+app = FastAPI(title="B-Hyve XD Local API", version="1.2.0", lifespan=_lifespan)
 _ble_lock = asyncio.Lock()   # the radio does one thing at a time
 _job = None                  # the single in-flight onboarding job (or None)
 _account_session = None       # in-memory only: {email, key, devices}. NEVER persisted;
@@ -333,6 +344,74 @@ async def put_schedules(index: int, body: SchedulesBody):
     except sched.ScheduleError as e:
         raise HTTPException(400, str(e)) from e
     return {"schedules": sched.read_schedules(CONFIG, mac)}
+
+
+class SchedulingBody(BaseModel):
+    enabled: bool
+
+
+_fired: set = set()   # (mac, valve, "YYYY-MM-DD HH:MM") already run — one fire per minute
+
+
+def _host_scheduling_enabled() -> bool:
+    try:
+        return bool(onboarding._load_config(CONFIG).get("host_scheduling"))
+    except (OSError, ValueError):
+        return False
+
+
+@app.get("/api/scheduling")
+async def get_scheduling():
+    """Whether host-driven scheduling is enabled (fires while THIS Mac is running)."""
+    return {"enabled": _host_scheduling_enabled()}
+
+
+@app.put("/api/scheduling")
+async def put_scheduling(body: SchedulingBody):
+    config = onboarding._load_config(CONFIG)
+    config["host_scheduling"] = bool(body.enabled)
+    onboarding._atomic_write_config(CONFIG, config)
+    return {"enabled": bool(body.enabled)}
+
+
+async def run_due(now: datetime, fire) -> list:
+    """Fire every due rule once for minute `now`. `fire(index, valve, minutes)` is injected
+    (real one does the BLE start; tests pass a stub). Respects the enable flag, refuses while
+    onboarding holds the radio, and is idempotent per (timer, valve, minute)."""
+    if _job is not None and not _job.done:       # onboarding owns the radio
+        return []
+    if not _host_scheduling_enabled():
+        return []
+    stamp = now.strftime("%Y-%m-%d %H:%M")
+    today = now.strftime("%Y-%m-%d")
+    for k in [k for k in _fired if not k[2].startswith(today)]:
+        _fired.discard(k)                         # prune stale days
+    import scheduler
+    fired = []
+    for i, d in enumerate(onboarding._load_config(CONFIG).get("devices", [])):
+        for r in scheduler.due_rules(d.get("schedules", []), now):
+            key = (d.get("mac"), r["valve"], stamp)
+            if key in _fired:
+                continue
+            _fired.add(key)
+            await fire(i, r["valve"], r["minutes"])
+            fired.append(key)
+    return fired
+
+
+async def _fire_start(index: int, valve: int, minutes: int):
+    """The real firing action: a serialized BLE start for `minutes` (device auto-stops)."""
+    async with _ble_lock:
+        await _device(str(index)).start(int(valve), int(minutes) * 60)
+
+
+async def _scheduler_loop():
+    while True:
+        try:
+            await run_due(datetime.now(), _fire_start)
+        except Exception:  # noqa: BLE001 — never let the loop die
+            pass
+        await asyncio.sleep(20)
 
 
 @app.get("/api/onboard/state")
