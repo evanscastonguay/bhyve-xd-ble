@@ -128,13 +128,13 @@ default. Multiple timers on one account share one account key.
   tested; the finalize bytes are **HT34 4-station specific**; the device is enrolled for
   **local control only** (not registered in the Orbit cloud/app); provisioning takes ~2–3
   min (the reconnect).
-- **Fully cloud-free provisioning (self-generated key)** — today we still fetch the
-  **account key** from a one-time cloud login. But the `6c76` key write is **plaintext and
-  unauthenticated** (the capture showed no SMP/pairing, no cloud challenge), and local
-  control only needs the device + controller to share *a* key — so writing our **own random
-  16-byte key** should give complete control with **no cloud/account at all**. Feasible and
-  evidence-supported, **not yet proven**; trade-off: the device would no longer match the
-  Orbit app/cloud until a factory reset. A one-line change to `provision` + a proof run.
+- **Fully cloud-free provisioning (self-generated key)** — **BUILT** (`cli.py provision
+  --self-key`, or `--key <hex>` for BYO): mints/writes our own 16-byte key, stashes it to
+  the git-ignored `secrets/`, labels the device `key_source: "self"`, and warns it's the
+  sole copy (back it up; app won't control it). Rests on the fact that the `6c76` write is
+  plaintext + unauthenticated. **Offline-tested; live durability NOT yet proven** — run
+  `provision_proof.py` against a `--self-key` device to confirm (same bar as the Orbit-key
+  proof). Config now records `key_source` (`orbit` = shared with the app; `self` = ours).
 - **Catch-once-and-hold resident server** (`PLAN_catch_and_hold.md`) — deferred; the
   stable UUID made it unnecessary for the current units.
 - **Linux/BlueZ headless host** — addresses by MAC (no rotating-UUID problem); the
