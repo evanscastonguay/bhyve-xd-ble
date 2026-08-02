@@ -533,6 +533,16 @@ async def onboard_flow(params, gate):
         _stash_key(key, want_mac, secrets_path)
         yield _step("get_key", "Standalone key", "Using a new self-generated key (no Orbit).",
                     state="done", verified=True)
+    elif mode == "reuse":
+        key = key_from_existing_config(path)
+        if not key:
+            yield _step("get_key", "No saved key", "No Orbit key is saved yet — choose “Use my "
+                        "Orbit account” or “Standalone” instead.", state="failed")
+            return
+        key_source = "orbit"
+        yield _step("get_key", "Using your saved Orbit key",
+                    "Reusing the account key already on this computer — no login needed.",
+                    state="done", verified=True)
     else:
         while key is None:
             yield _step("get_key", "Signing in to Orbit", "Fetching your account key…",
@@ -546,18 +556,27 @@ async def onboard_flow(params, gate):
                 yield _step("get_key", "Orbit account key", "Got your account key.",
                             state="done", verified=True)
                 break
+            # login/lookup didn't yield a key -> mark get_key FAILED (not stuck working),
+            # then offer the fallback choice.
             reason = ("Login failed — check the email/password (multi-factor accounts aren't "
                       "supported)." if klass == "auth_failed"
                       else "This timer isn't on your Orbit account yet.")
-            yield _step("fallback_choice", "Choose a setup method", reason,
+            yield _step("get_key", "Signing in to Orbit", reason, state="failed")
+            yield _step("fallback_choice", "Choose a setup method", "Pick how to continue.",
                         state="waiting_user", choices=["orbit_app_first", "self_key"])
             choice = await gate.wait()
+            yield _step("fallback_choice", "Choose a setup method",
+                        "You chose: " + ("set up in the Orbit app first" if choice == "orbit_app_first"
+                                         else "standalone (your own key)") + ".",
+                        state="done", verified=True)
             if choice == "orbit_app_first":
                 yield _step("app_instructions", "Set it up in the Orbit app first",
                             "Open the Orbit B-Hyve app → Add device → follow its steps to add "
                             "this timer to your account, then press Continue to retry.",
                             state="waiting_user")
                 await gate.wait()
+                yield _step("app_instructions", "Set it up in the Orbit app first",
+                            "Retrying sign-in…", state="done", verified=True)
                 continue
             key, key_source = os.urandom(16).hex(), "self"
             _stash_key(key, want_mac, secrets_path)
@@ -570,6 +589,8 @@ async def onboard_flow(params, gate):
                 "release. Keep your phone's Bluetooth OFF. Press Continue when ready.",
                 state="waiting_user")
     await gate.wait()
+    yield _step("await_reset", "Reset the timer into pairing mode", "Searching for the timer…",
+                state="done", verified=True)
 
     yield _step("provision", "Enrolling the timer",
                 "Writing the key and finalizing. The timer briefly drops its link after keying, "
