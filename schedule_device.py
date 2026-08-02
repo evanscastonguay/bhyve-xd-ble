@@ -94,21 +94,24 @@ def program_from_rules(rules: list[dict]) -> dict:
     minutes -> run_sec. Day-of-week masks are NOT yet supported (dayFlags bit order unknown), so
     a rule with specific days is mapped as DAILY and a warning is recorded.
     """
+    # Only ENABLED rules become on-device programs (a disabled rule just isn't pushed), so
+    # disabled rules never consume a program slot toward the A–F cap. Program ids are assigned
+    # sequentially to the enabled rules; active_mask enables exactly them.
     programs, warnings, mask = [], [], 0
     for i, r in enumerate(rules):
-        if i >= MAX_PROGRAMS:
+        if not bool(r.get("enabled", True)):
+            continue
+        if len(programs) >= MAX_PROGRAMS:
             warnings.append(f"only {MAX_PROGRAMS} on-device programs (A–F) are supported; "
                             f"rule #{i + 1} and beyond were not pushed")
             break
         hh, mm = str(r["start"]).split(":")
         start_min = int(hh) * 60 + int(mm)
         station = (int(r["valve"]) - 1, int(r["minutes"]) * 60)     # 0-indexed valve, seconds
-        enabled = bool(r.get("enabled", True))
-        pid = i + 1                                                  # A=1 .. F=6
+        pid = len(programs) + 1                                      # A=1 .. F=6 (enabled order)
         programs.append({"program_id": pid, "start_mins": [start_min],
-                         "stations": [station], "enabled": enabled})
-        if enabled:
-            mask |= program_bit(pid)
+                         "stations": [station], "enabled": True})
+        mask |= program_bit(pid)
         if set(r.get("days") or []) != set(range(7)):
             warnings.append(f"rule #{i + 1} runs on specific days; on-device currently runs it "
                             f"DAILY (weekday masks not supported yet)")
