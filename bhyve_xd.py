@@ -233,8 +233,11 @@ def parse_reply(pt: bytes) -> DeviceStatus | None:
                 elif sfn == 6 and swt == 2:      # active-run submessage (present only while watering)
                     st.is_watering = True
                     for tfn, twt, tv in iter_fields(sv):
-                        if tfn == 1 and twt == 0:
-                            st.active_zone = tv   # 1-indexed station (verified live: Valve 2 -> 2)
+                        # tfn=4 is the 1-indexed active station (verified live across zones:
+                        # Valve 2 -> 4=2, Valve 3 -> 4=3). tfn=1 is a constant run-type (2),
+                        # NOT the station — reading it lit every valve as #2.
+                        if tfn == 4 and twt == 0:
+                            st.active_zone = tv
                         elif tfn == 7 and twt == 0:
                             st.seconds_remaining = tv
     return st
