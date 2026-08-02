@@ -316,17 +316,9 @@ def key_from_existing_config(path: str) -> str | None:
     return None
 
 
-def write_config(path: str, device: dict) -> dict:
-    """Merge `device` into the `devices` list of `path` and write it back atomically.
-
-    device: {name, address, network_key, mac, stations, tz_offset_sec?}. Matching is
-    by `mac` (case-insensitive), falling back to `address`; a match is updated in
-    place (preserving any extra fields already there), otherwise the device is
-    appended. Returns the full config dict written.
-
-    A missing/empty file starts a fresh config. A file that exists but is not valid
-    JSON raises ValueError and is left untouched (never clobbered).
-    """
+def _load_config(path: str) -> dict:
+    """Load the config dict from `path`, or a fresh {'devices': []} if missing/empty.
+    A file that exists but is not valid JSON raises ValueError (never clobbered)."""
     config: dict = {"devices": []}
     if os.path.exists(path):
         text = open(path).read().strip()
@@ -335,6 +327,40 @@ def write_config(path: str, device: dict) -> dict:
                 config = json.loads(text)
             except json.JSONDecodeError as err:
                 raise ValueError(f"{path} is not valid JSON — refusing to overwrite") from err
+    return config
+
+
+def _atomic_write_config(path: str, config: dict) -> dict:
+    """Write `config` to `path` atomically (write temp + os.replace). Returns config."""
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".config.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(config, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)   # atomic on POSIX
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return config
+
+
+def write_config(path: str, device: dict) -> dict:
+    """Merge `device` into the `devices` list of `path` and write it back atomically.
+
+    device: {name, address, network_key, mac, stations, tz_offset_sec?}. Matching is
+    by `mac` (case-insensitive), falling back to `address`; a match is updated in
+    place (preserving any extra fields already there), otherwise the device is
+    appended. Preserves any `account` block already present. Returns the full config
+    dict written.
+
+    A missing/empty file starts a fresh config. A file that exists but is not valid
+    JSON raises ValueError and is left untouched (never clobbered).
+    """
+    config = _load_config(path)
     devices = config.setdefault("devices", [])
 
     want_mac = (device.get("mac") or "").upper()
@@ -351,20 +377,32 @@ def write_config(path: str, device: dict) -> dict:
     else:
         devices[idx] = {**devices[idx], **device}   # update, keep any extra existing fields
 
-    directory = os.path.dirname(os.path.abspath(path))
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".config.", suffix=".json")
+    return _atomic_write_config(path, config)
+
+
+def read_account(path: str) -> dict | None:
+    """Return the remembered Orbit account {'email', 'network_key'} from `path`, or None.
+
+    The account is per-install (not per-timer): its network key is the shared account/mesh
+    key, reused to add further timers without another login. The password is NEVER stored."""
     try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(config, f, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)   # atomic on POSIX
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return config
+        acct = _load_config(path).get("account")
+    except (ValueError, OSError):
+        return None
+    if isinstance(acct, dict) and acct.get("email") and acct.get("network_key"):
+        return {"email": acct["email"], "network_key": acct["network_key"]}
+    return None
+
+
+def write_account(path: str, email: str, network_key: str) -> dict:
+    """Persist the Orbit account (email + shared network key) into the `account` block of
+    `path`, atomically, preserving the `devices` list. NEVER stores the password.
+
+    A file that exists but is not valid JSON raises ValueError and is left untouched."""
+    config = _load_config(path)
+    config.setdefault("devices", [])
+    config["account"] = {"email": email, "network_key": network_key}
+    return _atomic_write_config(path, config)
 
 
 # --------------------------------------------------------------------------- #
@@ -533,7 +571,7 @@ async def onboard_flow(params, gate):
     want_mac = params.get("device_mac")
     path = params.get("path", "config.json")
     secrets_path = params.get("secrets_path")
-    stations = 4
+    stations = int(params.get("stations") or 4)
     key = None
     key_source = None
 
@@ -541,6 +579,19 @@ async def onboard_flow(params, gate):
         key, key_source = os.urandom(16).hex(), "self"
         _stash_key(key, want_mac, secrets_path)
         yield _step("get_key", "Standalone key", "Using a new self-generated key (no Orbit).",
+                    state="done", verified=True)
+    elif mode == "account":
+        # The server has already authenticated and injected the shared account key
+        # (the key never travels through the browser). Just provision this timer.
+        key = params.get("key")
+        if not key:
+            yield _step("get_key", "No account key",
+                        "No account key was provided — sign in to your Orbit account first.",
+                        state="failed")
+            return
+        key_source = "orbit"
+        yield _step("get_key", "Using your Orbit account key",
+                    "Adding this timer with your saved account key — no login needed.",
                     state="done", verified=True)
     elif mode == "reuse":
         key = key_from_existing_config(path)
@@ -619,6 +670,13 @@ async def onboard_flow(params, gate):
                         "Using a new self-generated key — the Orbit app won't control this timer; "
                         "your key is saved to secrets/.", state="done", verified=True)
 
+    async for ev in _provision_and_save(key, key_source, want_mac, name, stations, path, gate):
+        yield ev
+
+
+async def _provision_and_save(key, key_source, want_mac, name, stations, path, gate):
+    """The shared onboarding tail once a key is in hand (any mode): reset -> provision ->
+    verify -> save. Yields Step events; NEVER yields the network key."""
     yield _step("await_reset", "Reset the timer into pairing mode",
                 "Turn the dial to OFF, press and hold ~10s until the full display lights, then "
                 "release. Keep your phone's Bluetooth OFF. Press Continue when ready.",
