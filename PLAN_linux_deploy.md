@@ -38,6 +38,26 @@ working `hci0` Bluetooth (BlueZ 5.72). See [[linux-control-box]].
 - Any change to the control/schedule logic — this is deployment, not new features.
 
 ## Phases (each proves something)
+### P0 — Repo cleanup (on the Mac / git, before the Linux clone)
+So the box clones only product-relevant files. Verified by usage analysis (imports + refs).
+- **Organize docs under `docs/`** (README.md stays at root):
+  - `docs/` ← `SPIKE_provisioning.md`, `SPIKE_schedule.md` (reverse-engineering **reference** — keep handy).
+  - `docs/plans/` ← the `PLAN_*.md` (active `PLAN_linux_deploy.md` + historical).
+  - `docs/archive/` ← `PROJECT_STATUS.md`, `VERIFIED.md`, `ONBOARDING_PLAN.md` (stale/historical).
+- **Delete orphan/stale scripts** (git history retains them — decision: delete):
+  - `selftest_offline.py` — stale (54/55, one mismatch) + redundant with `test_e2e.py`.
+  - `bhyve_lab.py` — original manual script, superseded by `cli.py`, imported by nothing.
+  - (local `bhyve_lab.log` is git-ignored; remove it locally too.)
+- **Keep at root** (decision): product modules (`bhyve_xd`, `onboarding`, `cli`, `server`,
+  `index.html`, `schedule`, `scheduler`, `schedule_device`), `config.example.json`,
+  `requirements*.txt`, `README.md`, `.gitignore`, and the tests **`test_e2e.py`** +
+  **`provision_proof.py`** (the latter is imported by `test_e2e.py:1292` — must stay importable).
+- **Fix references**: update `README.md` (it points to `selftest_offline.py` and will point at
+  `docs/…`); update any doc cross-links as needed.
+- **Gate:** `pytest test_e2e.py` still **131 green**; `python -c "import server, cli, onboarding,
+  bhyve_xd, schedule, scheduler, schedule_device"` OK. Do it via git mv (preserve history), one PR.
+- **Proves:** the tree is only what the product needs — a clean base to deploy.
+
 ### P1 — Provision (no device writes)
 - On `bhyve-linux`: `git clone` the repo (or rsync), `python3 -m venv venv`, `pip install -r
   requirements.txt`. Install any BlueZ deps if pip/bleak need them (`libglib2.0`, dbus present by
@@ -93,6 +113,7 @@ working `hci0` Bluetooth (BlueZ 5.72). See [[linux-control-box]].
 - ⛳ P5 — schedules fire from Linux without the Mac.
 
 ## First concrete action
-P1: over `ssh bhyve-linux`, clone the repo + create the venv + `pip install -r requirements.txt`,
-then a read-only BLE scan to confirm bleak/BlueZ sees the `fe32` timer. No config/secret yet, no
-device writes. (I can drive this over SSH; any `sudo`/privileged step I'll hand to you to run.)
+P0: on the Mac, `git mv` the docs into `docs/` (+ `docs/plans/`, `docs/archive/`), delete the two
+orphan scripts, update README references, confirm `pytest test_e2e.py` stays 131 green + product
+imports OK, and open a PR. THEN P1 clones the cleaned repo onto `bhyve-linux`. (Any `sudo`/
+privileged Linux step I'll hand to you; no SSH password typing.)
