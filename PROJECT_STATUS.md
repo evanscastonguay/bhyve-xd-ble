@@ -113,10 +113,12 @@ default. Multiple timers on one account share one account key.
 - Backup checkpoint tag: **`onboarding-complete-2026-08-01`** (pushed).
 
 ## 10. Known gaps / possible future work
-- **App-free factory-reset onboarding** — **built** (`onboarding.provision_device` +
-  `cli.py provision`): writes `0x0100`‖key to char `6c76`, then verifies. Offline-tested
-  against a fake fresh device; **live gate pending** (needs one factory reset to confirm
-  on hardware). Mechanism: `SPIKE_provisioning.md`.
+- **App-free factory-reset onboarding** — **built AND live-verified (2026-08-01)**:
+  `onboarding.provision_device` / `cli.py provision` took a factory-reset, keyless device
+  and enrolled it — wrote `0x0100`‖key to char `6c76`, then confirmed by reading the
+  device's MAC + status back — **with the Orbit app never opened**. Local control needs
+  only the on-device key write (no cloud registration). Mechanism: `SPIKE_provisioning.md`.
+  This closes the last app dependency; the full lifecycle is now app-free.
 - **Catch-once-and-hold resident server** (`PLAN_catch_and_hold.md`) — deferred; the
   stable UUID made it unnecessary for the current units.
 - **Linux/BlueZ headless host** — addresses by MAC (no rotating-UUID problem); the
