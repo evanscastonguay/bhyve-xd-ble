@@ -72,11 +72,19 @@ So the box clones only product-relevant files. Verified by usage analysis (impor
 - **⚠ Finding for P2:** timers do **NOT** advertise `fe32` — it's post-connect GATT. On Linux,
   connect by **MAC**, don't filter scans by service UUID. `config.json`/`secrets/` not yet on the box.
 
-### P2 — Config + live status ⛳
+### P2 — Config + live status ⛳ ✅ DONE 2026-08-02
 - Create `/home/evans/.../config.json` on the box with `address = 44:67:55:D8:71:B0`, `mac` same,
   the current network key, `stations 4`. (scp the key material over SSH, or re-adopt on the box;
   chmod 600.) `.gitignore` already excludes it.
 - `python cli.py status` (or `GET /api/status`) **from the box** → decodes clock/state.
+- **Result:** `~/bhyve-xd-ble/config.json` written via SSH pipe (key never printed), `chmod 600`,
+  `address` = MAC `44:67:55:D8:71:B0`, tz −14400, 4 stations. **Live status decoded from the box**
+  — CLI twice (clock advanced `21:31:24 → 21:31:54`, live) and **`GET /api/status`** (`{"clock":
+  "21:33:38 UTC","is_watering":false,"run_state":0,...}`, root 200 / API 200). Full app stack runs
+  on Linux (handshake → arm → encrypted notify → counter resync → parse). No valve writes.
+- **Gotcha (recorded):** never `pkill -f "uvicorn server:app"` over SSH — the pattern matches the
+  SSH shell's own argv and kills the session. Kill by PID (skip `$$`); launch detached
+  (`setsid … </dev/null &` + pidfile).
 - **Proves:** the Linux box can actually control THIS timer over BLE.
 
 ### P3 — Control parity (hose off)
