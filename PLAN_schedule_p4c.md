@@ -90,6 +90,17 @@ reliable engine — **without regressing control** and **without silently wiping
 - ⛳ P4c-3 UI engine choice on the served page.
 - ⛳ P4c-4 a UI-authored schedule runs autonomously.
 
+## Known limitations to address in P4c-3 (from the P4c-2 adversarial review)
+- **Stale-mask re-enable:** `arm()` re-enables `device_active_mask` from config on every connect.
+  If a schedule is disabled/deleted *outside* this app (Orbit app, factory reset), a control
+  session would silently reactivate it. P4c-3 should reconcile against a live `getActivePrograms`
+  read (only re-enable bits whose program still exists) rather than trusting config blindly.
+- **Verify is mask-level only:** push confirms the active bitmask, not program *content*, and
+  never deletes unmapped program slots (only masks them off). P4c-3 should clear unmapped
+  programs and optionally read back program definitions.
+- **Slot accounting:** the 6-program cap counts disabled rules by list index; map slots after
+  filtering enabled rules so disabled rules don't starve the cap.
+
 ## First concrete action
 P4c-1: add the **post-arm re-enable** hook + a failing test proving a control session preserves
 the active-programs mask (arm no longer leaves it 0), then implement. No new device-write risk

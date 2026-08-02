@@ -414,6 +414,65 @@ async def _scheduler_loop():
         await asyncio.sleep(20)
 
 
+@app.post("/api/timers/{index}/schedules/push")
+async def push_schedules(index: int):
+    """Store the timer's saved rules ON the device (autonomous, runs with the Mac off).
+    Encodes each rule as a Program + enables them, verifies via getActivePrograms, and
+    persists the active mask so future control sessions re-enable it. Serialized on the BLE
+    lock; refused during onboarding."""
+    import schedule as sched
+    import schedule_device as SD
+    if _job is not None and not _job.done:
+        raise HTTPException(503, "onboarding in progress — try again once it finishes")
+    mac = _mac_at(index)
+    rules = sched.read_schedules(CONFIG, mac)
+    try:
+        SD.encode_push_frames(rules)        # pure encode first: surface bad data as 400, not a BLE error
+    except (ValueError, KeyError, sched.ScheduleError) as e:
+        raise HTTPException(400, f"bad schedule rule: {e}") from e
+    async with _ble_lock:
+        dev = BHyveXD.from_config(CONFIG, device=index)
+        try:
+            res = await SD.push_program_to_device(dev, rules)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(504, f"BLE error pushing schedules: {e}") from e
+    if not res["verified"]:                 # device didn't confirm the read-back — don't claim success
+        raise HTTPException(502, "the timer did not confirm the schedule (read-back mismatch); "
+                                 "not saved — try again")
+    sched.set_device_active_mask(CONFIG, mac, res["active_mask"])
+    return res
+
+
+@app.post("/api/timers/{index}/schedules/clear")
+async def clear_device_schedules(index: int):
+    """Disable all on-device programs for the timer (setActivePrograms 0) and clear the saved
+    active mask, so nothing runs autonomously."""
+    import schedule as sched
+    import schedule_device as SD
+    if _job is not None and not _job.done:
+        raise HTTPException(503, "onboarding in progress — try again once it finishes")
+    mac = _mac_at(index)
+    async with _ble_lock:
+        dev = BHyveXD.from_config(CONFIG, device=index)
+        try:
+            async with dev.session() as sess:
+                await sess.arm()
+                await sess._send(SD.encode_set_active(0))
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(504, f"BLE error clearing schedules: {e}") from e
+    sched.set_device_active_mask(CONFIG, mac, 0)
+    return {"active_mask": 0}
+
+
+@app.get("/api/timers/{index}/device-active")
+async def device_active(index: int):
+    """The persisted on-device active-program bitmask for the timer (0 = none)."""
+    devs = onboarding._load_config(CONFIG).get("devices", [])
+    if not 0 <= index < len(devs):
+        raise HTTPException(404, f"no timer at index {index}")
+    return {"device_active_mask": int(devs[index].get("device_active_mask", 0))}
+
+
 @app.get("/api/onboard/state")
 async def onboard_state():
     """Tell the UI whether a saved account key exists — if so, adding another timer
