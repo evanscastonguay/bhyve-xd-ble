@@ -454,6 +454,143 @@ async def catch_device_session(network_key_hex: str, *, want_mac: str | None = N
         "keep the timer close to the Mac and retry")
 
 
+# --------------------------------------------------------------------------- #
+# Web onboarding state machine — an async generator of per-step events for the
+# SSE-driven wizard (PLAN_web_onboarding.md). Tries the Orbit account key first;
+# on login failure / first-user (device not on account) it emits a fallback CHOICE
+# (guided app setup + retry, or self-key). Human-gated steps pause on a gate the
+# caller resumes (optionally with a choice). Never emits the key.
+# --------------------------------------------------------------------------- #
+class OnboardGate:
+    def __init__(self):
+        self._ev = asyncio.Event()
+        self._choice = None
+
+    def resume(self, choice=None):
+        self._choice = choice
+        self._ev.set()
+
+    async def wait(self):
+        await self._ev.wait()
+        self._ev.clear()
+        return self._choice
+
+
+def _step(sid, title, instruction, *, state, expected_wait_s=None, verified=False, choices=None):
+    ev = {"id": sid, "title": title, "instruction": instruction, "state": state, "verified": verified}
+    if expected_wait_s is not None:
+        ev["expected_wait_s"] = expected_wait_s
+    if choices is not None:
+        ev["choices"] = choices
+    return ev
+
+
+def _stash_key(key, mac, path):
+    """Append a self-generated key to a git-ignored stash so it's never lost."""
+    if not path:
+        return
+    from datetime import datetime
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(f"\n## self-key {datetime.now().isoformat(timespec='seconds')}\n"
+                f"- device_mac: {mac or '(pending)'}\n- network_key: {key}\n")
+
+
+async def _try_orbit_key(email, password, want_mac):
+    """Determine whether a usable key is actually obtainable. Returns
+    (classification, chosen_device): 'key_obtained' | 'auth_failed' | 'no_device_on_account'."""
+    try:
+        devices = await cloud_fetch(email, password)
+    except CloudError:                      # AuthError / MFARequired / RateLimited / conn
+        return "auth_failed", None
+    controllable = [d for d in devices if d.get("network_key")]
+    want = want_mac.upper() if want_mac else None
+    if want:
+        chosen = next((d for d in controllable if (d.get("mac") or "").upper() == want), None)
+    elif len(controllable) == 1:
+        chosen = controllable[0]
+    else:
+        chosen = None                       # empty, or ambiguous without a MAC
+    return ("key_obtained", chosen) if chosen else ("no_device_on_account", None)
+
+
+async def onboard_flow(params, gate):
+    """Async generator of onboarding Step events (see OnboardGate for human gating).
+    params: {mode: 'orbit'|'self', email?, password?, name?, device_mac?, path, secrets_path?}.
+    Orchestrates get-key (orbit, with fallback choice, or self) -> reset -> provision ->
+    verify -> save. NEVER yields the network key."""
+    mode = params.get("mode", "orbit")
+    name = params.get("name")
+    want_mac = params.get("device_mac")
+    path = params.get("path", "config.json")
+    secrets_path = params.get("secrets_path")
+    stations = 4
+    key = None
+    key_source = None
+
+    if mode == "self":
+        key, key_source = os.urandom(16).hex(), "self"
+        _stash_key(key, want_mac, secrets_path)
+        yield _step("get_key", "Standalone key", "Using a new self-generated key (no Orbit).",
+                    state="done", verified=True)
+    else:
+        while key is None:
+            yield _step("get_key", "Signing in to Orbit", "Fetching your account key…",
+                        state="working", expected_wait_s=20)
+            klass, chosen = await _try_orbit_key(params.get("email"), params.get("password"), want_mac)
+            if klass == "key_obtained":
+                key, key_source = chosen["network_key"], "orbit"
+                want_mac = want_mac or chosen.get("mac")
+                name = name or chosen.get("name")
+                stations = int(chosen.get("stations") or 4)
+                yield _step("get_key", "Orbit account key", "Got your account key.",
+                            state="done", verified=True)
+                break
+            reason = ("Login failed — check the email/password (multi-factor accounts aren't "
+                      "supported)." if klass == "auth_failed"
+                      else "This timer isn't on your Orbit account yet.")
+            yield _step("fallback_choice", "Choose a setup method", reason,
+                        state="waiting_user", choices=["orbit_app_first", "self_key"])
+            choice = await gate.wait()
+            if choice == "orbit_app_first":
+                yield _step("app_instructions", "Set it up in the Orbit app first",
+                            "Open the Orbit B-Hyve app → Add device → follow its steps to add "
+                            "this timer to your account, then press Continue to retry.",
+                            state="waiting_user")
+                await gate.wait()
+                continue
+            key, key_source = os.urandom(16).hex(), "self"
+            _stash_key(key, want_mac, secrets_path)
+            yield _step("get_key", "Standalone key",
+                        "Using a new self-generated key — the Orbit app won't control this timer; "
+                        "your key is saved to secrets/.", state="done", verified=True)
+
+    yield _step("await_reset", "Reset the timer into pairing mode",
+                "Turn the dial to OFF, press and hold ~10s until the full display lights, then "
+                "release. Keep your phone's Bluetooth OFF. Press Continue when ready.",
+                state="waiting_user")
+    await gate.wait()
+
+    yield _step("provision", "Enrolling the timer",
+                "Writing the key and finalizing. The timer briefly drops its link after keying, "
+                "so this reconnects on its own — please wait.", state="working", expected_wait_s=90)
+    try:
+        address, mac, st = await provision_device(key, want_mac=want_mac)
+    except ResolveError as e:
+        yield _step("provision", "Enrolling the timer", f"Provisioning failed: {e}", state="failed")
+        return
+
+    yield _step("verify", "Verifying control",
+                f"The timer answered — MAC {mac}, clock {st.clock_str}.", state="done", verified=True)
+
+    device = {"name": name or "B-Hyve XD", "address": address, "network_key": key,
+              "mac": mac, "stations": stations, "key_source": key_source}
+    write_config(path, device)
+    yield _step("save", "Saved and ready",
+                f"'{device['name']}' is set up ({key_source} key). You can control it now.",
+                state="done", verified=True)
+
+
 # Provisioning characteristic — reverse-engineered from the Phase B HCI capture
 # (SPIKE_provisioning.md): a factory-fresh device accepts the account key as a single
 # plaintext write of 0x0100 || key to this characteristic. No pairing/encryption.
