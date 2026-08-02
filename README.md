@@ -12,6 +12,32 @@ reports `watering, 300s remaining` after a start and `idle` after a stop.
 > your device firmware — the protocol was reverse-engineered against fw 0107 and
 > an update may change it.
 
+## Status — the full lifecycle, app-free
+
+This project can take a timer from **factory-fresh to durably controllable with the Orbit
+app never opened** — the last step of that is proven, not just claimed.
+
+**Solved (verified on real hardware):**
+- **Control** — status / start / stop, each confirmed by the device's own read-back.
+- **Onboarding** — one command (`cli.py register`), a first-run cloud flow, and a web wizard.
+- **App-free enrollment** — `cli.py provision` writes the key onto a factory-reset device
+  (char `6c76`) and replays the app's finalize sequence. **PROVEN durable (2026-08-02):** a
+  proof run (`provision_proof.py`) confirmed the device was **keyless first** (negative
+  control), provisioned it **app-free**, and it **survived 3 power-cycles**, each re-verified
+  in a fresh process. The device drops the BLE link after keying, so provisioning is
+  two-phase (write → reconnect → finalize); it takes ~2–3 min.
+
+**Not yet / honest caveats:**
+- Proven on **one device, macOS**; not repeated across devices/models (finalize bytes are
+  **HT34 4-station** specific) or on Linux/BlueZ.
+- Enrolls for **local control only** — not registered in Orbit's cloud/app.
+- Still obtains the **account key** from a one-time cloud login (or existing config). Writing
+  a **self-generated key** to skip the cloud entirely looks feasible (the key write is
+  plaintext + unauthenticated) but is **not yet proven**, and would decouple the device from
+  the Orbit app until a factory reset.
+
+Full detail + evidence: `PROJECT_STATUS.md`, `SPIKE_provisioning.md`, `provision_proof.py`.
+
 ## The one thing that makes this work
 
 Many prior attempts fail because the device **decrypts your command correctly but
