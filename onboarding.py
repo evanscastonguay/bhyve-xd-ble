@@ -571,7 +571,7 @@ async def onboard_flow(params, gate):
     want_mac = params.get("device_mac")
     path = params.get("path", "config.json")
     secrets_path = params.get("secrets_path")
-    stations = 4
+    stations = int(params.get("stations") or 4)
     key = None
     key_source = None
 
@@ -579,6 +579,19 @@ async def onboard_flow(params, gate):
         key, key_source = os.urandom(16).hex(), "self"
         _stash_key(key, want_mac, secrets_path)
         yield _step("get_key", "Standalone key", "Using a new self-generated key (no Orbit).",
+                    state="done", verified=True)
+    elif mode == "account":
+        # The server has already authenticated and injected the shared account key
+        # (the key never travels through the browser). Just provision this timer.
+        key = params.get("key")
+        if not key:
+            yield _step("get_key", "No account key",
+                        "No account key was provided — sign in to your Orbit account first.",
+                        state="failed")
+            return
+        key_source = "orbit"
+        yield _step("get_key", "Using your Orbit account key",
+                    "Adding this timer with your saved account key — no login needed.",
                     state="done", verified=True)
     elif mode == "reuse":
         key = key_from_existing_config(path)
@@ -657,6 +670,13 @@ async def onboard_flow(params, gate):
                         "Using a new self-generated key — the Orbit app won't control this timer; "
                         "your key is saved to secrets/.", state="done", verified=True)
 
+    async for ev in _provision_and_save(key, key_source, want_mac, name, stations, path, gate):
+        yield ev
+
+
+async def _provision_and_save(key, key_source, want_mac, name, stations, path, gate):
+    """The shared onboarding tail once a key is in hand (any mode): reset -> provision ->
+    verify -> save. Yields Step events; NEVER yields the network key."""
     yield _step("await_reset", "Reset the timer into pairing mode",
                 "Turn the dial to OFF, press and hold ~10s until the full display lights, then "
                 "release. Keep your phone's Bluetooth OFF. Press Continue when ready.",

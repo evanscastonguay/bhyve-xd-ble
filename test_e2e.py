@@ -466,6 +466,62 @@ def test_api_onboard_start_stream_continue(monkeypatch, tmp_path):
     asyncio.run(scenario())
 
 
+def test_onboard_start_account_mode_injects_key_from_session(monkeypatch, tmp_path):
+    """P3: the browser sends only a MAC; the server injects the account key from the
+    in-memory session (never round-tripping the key through the client)."""
+    import server
+    import onboarding as O
+    monkeypatch.setattr(server, "CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+    monkeypatch.setattr(server, "_account_session",
+                        {"email": "me@x.com", "key": "dd" * 16,
+                         "devices": [{"name": "Smart Hose Tap Timer",
+                                      "mac": "AA:BB:CC:DD:EE:01", "stations": 4}]}, raising=False)
+    captured = {}
+
+    async def fake_flow(params, gate):
+        captured.update(params)
+        yield {"id": "save", "title": "s", "instruction": "", "state": "done", "verified": True}
+
+    monkeypatch.setattr(O, "onboard_flow", fake_flow)
+
+    async def scenario():
+        await server.onboard_start(server.OnboardStartBody(mode="account",
+                                                           device_mac="AA:BB:CC:DD:EE:01"))
+        await server._job.task
+
+    asyncio.run(scenario())
+    assert captured["mode"] == "account" and captured["key"] == "dd" * 16   # injected server-side
+    assert captured["name"] == "Smart Hose Tap Timer"                       # from the cached list
+    assert captured["device_mac"] == "AA:BB:CC:DD:EE:01"
+
+
+def test_onboard_start_account_mode_falls_back_to_saved_key(monkeypatch, tmp_path):
+    """P3: no live session -> inject the persisted account key (add-a-timer after restart)."""
+    import server
+    import onboarding as O
+    cfg = tmp_path / "config.json"
+    O.write_account(str(cfg), "me@x.com", "ee" * 16)
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+    monkeypatch.setattr(server, "_account_session", None, raising=False)
+    captured = {}
+
+    async def fake_flow(params, gate):
+        captured.update(params)
+        yield {"id": "save", "title": "s", "instruction": "", "state": "done", "verified": True}
+
+    monkeypatch.setattr(O, "onboard_flow", fake_flow)
+
+    async def scenario():
+        await server.onboard_start(server.OnboardStartBody(mode="account",
+                                                           device_mac="AA:BB:CC:DD:EE:01"))
+        await server._job.task
+
+    asyncio.run(scenario())
+    assert captured["key"] == "ee" * 16                                     # from persisted account
+
+
 def test_api_run_blocks_during_onboarding(monkeypatch):
     """Control endpoints must refuse (503) while an onboarding job is running, to avoid
     two BLE operations on the one radio."""
@@ -1170,6 +1226,53 @@ def test_onboard_flow_multiple_devices_shows_picker(tmp_path, monkeypatch):
     assert saved["key_source"] == "orbit" and saved["network_key"] == KEY_B
     assert saved["name"] == "Smart Hose Tap Timer"
     assert KEY_A not in json.dumps(events) and KEY_B not in json.dumps(events)  # no key leaks
+
+
+def test_onboard_flow_account_mode_uses_injected_key(tmp_path, monkeypatch):
+    """P3: account mode provisions with the server-injected key (no cloud_fetch, no
+    login/pick inside the flow) — the clean 'authenticate elsewhere, provision here' seam."""
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    ACC_KEY = "cc" * 16
+    captured = {}
+
+    async def cap_provision(key, *, want_mac=None, **kw):
+        captured["key"], captured["mac"] = key, want_mac
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+
+    def no_cloud(*a, **k):
+        raise AssertionError("account mode must not call cloud_fetch")
+
+    monkeypatch.setattr(O, "provision_device", cap_provision)
+    monkeypatch.setattr(O, "cloud_fetch", no_cloud)
+    gate = O.OnboardGate()
+    params = {"mode": "account", "key": ACC_KEY, "name": "Smart Hose Tap Timer",
+              "device_mac": "AA:BB:CC:DD:EE:01", "stations": 4, "path": str(p)}
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_reset": None}))
+    assert captured["key"] == ACC_KEY and captured["mac"] == "AA:BB:CC:DD:EE:01"
+    saved = json.loads(p.read_text())["devices"][0]
+    assert saved["key_source"] == "orbit" and saved["network_key"] == ACC_KEY
+    assert saved["name"] == "Smart Hose Tap Timer"
+    assert events[-1]["id"] == "save"
+    assert ACC_KEY not in json.dumps(events)             # key never in an event
+
+
+def test_onboard_flow_account_mode_missing_key_fails(tmp_path, monkeypatch):
+    import onboarding as O
+    p = tmp_path / "config.json"
+
+    async def boom(*a, **k):
+        raise AssertionError("must not provision without a key")
+
+    monkeypatch.setattr(O, "provision_device", boom)
+    gate = O.OnboardGate()
+    events = asyncio.run(_drive_onboard(
+        O.onboard_flow({"mode": "account", "path": str(p)}, gate), gate, {}))
+    assert events[-1]["id"] == "get_key" and events[-1]["state"] == "failed"
+    assert not any(e["id"] == "save" for e in events)
+    assert not p.exists()                                # nothing written
 
 
 def test_onboard_flow_auth_fail_then_self_key(tmp_path, monkeypatch):
