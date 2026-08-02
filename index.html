@@ -124,12 +124,12 @@
         <div style="margin-top:12px"><button class="bon" onclick="schSave()">Save rules</button></div>
       </div>
       <div class="card">
-        <div style="font-weight:600;margin-bottom:8px">How should these run?</div>
+        <div style="font-weight:600;margin-bottom:8px">Run automatically?</div>
         <div style="display:grid;gap:8px">
           <label class="engopt"><input type="radio" name="engine" id="eng_off" onchange="schSetEngine('off')">
-            Off <span class="min">— saved, but nothing runs them</span></label>
-          <label class="engopt"><input type="radio" name="engine" id="eng_mac" onchange="schSetEngine('mac')">
-            On this Mac <span class="min">— runs while this Mac is on & in Bluetooth range</span></label>
+            Off <span class="min">— rules are saved but never run</span></label>
+          <label class="engopt"><input type="radio" name="engine" id="eng_on" onchange="schSetEngine('on')">
+            Automatic <span class="min">— runs on its own while the controller is powered & in Bluetooth range</span></label>
         </div>
         <div class="hint" id="sch_engine_status" style="margin-top:10px"></div>
       </div>
@@ -383,28 +383,29 @@ async function schLoad(){
   try{ const r=await api("GET",`/api/timers/${curIndex}/schedules`); schedRules=r.schedules||[]; }
   catch(e){ schedRules=[]; banner("Couldn't load schedules: "+e.message,"err"); }
   try{ schStatus=await api("GET","/api/scheduling"); }catch(_){ schStatus={}; }
-  schEngine = schStatus.enabled ? "mac" : "off";
+  schEngine = schStatus.enabled ? "on" : "off";
   $("#eng_off").checked = schEngine==="off";
-  $("#eng_mac").checked = schEngine==="mac";
+  $("#eng_on").checked = schEngine==="on";
   schEngineStatus();
   renderSchedList();
 }
 function schEngineStatus(msg){
   if(msg){ $("#sch_engine_status").textContent=msg; return; }
-  let s = schEngine==="mac"
-    ? "Running while this Mac is on (it must stay awake & in Bluetooth range)."
-    : "Off — rules are saved but nothing runs them.";
+  // Only show DYNAMIC info here (next / last run). The radio sub-labels already explain
+  // what Off/Automatic mean, so we don't repeat that text.
+  if(schEngine!=="on"){ $("#sch_engine_status").textContent=""; return; }
+  let s="";
   const nd=schStatus.next_due;
-  if(schEngine==="mac" && nd) s+=` · Next: Valve ${nd.valve} at ${(nd.when||"").slice(11,16)} (${(nd.when||"").slice(5,10)}).`;
+  if(nd) s+=`Next: Valve ${nd.valve} at ${(nd.when||"").slice(11,16)} (${(nd.when||"").slice(5,10)}).`;
   const lr=schStatus.last_runs||[];
-  if(lr.length){ const L=lr[lr.length-1]; s+=` · Last: Valve ${L.valve} ${L.start} ${L.ok?"✓":"✗"}.`; }
+  if(lr.length){ const L=lr[lr.length-1]; s+=`${s?" · ":""}Last: Valve ${L.valve} ${L.start} ${L.ok?"✓":"✗"}.`; }
   $("#sch_engine_status").textContent=s;
 }
 async function schSetEngine(engine){
   if(busy)return; setBusy(true,"applying…"); banner(null);
   try{
-    await api("PUT","/api/scheduling",{enabled: engine==="mac"});
-    banner(engine==="mac"?"Now running while this Mac is on.":"Scheduling off.","ok");
+    await api("PUT","/api/scheduling",{enabled: engine==="on"});
+    banner(engine==="on"?"Now running automatically.":"Automatic run turned off.","ok");
     await schLoad();                                   // refresh status (next-due / last-run)
   }catch(e){ banner("Couldn't apply: "+e.message,"err"); await schLoad(); }
   setBusy(false);
@@ -438,8 +439,8 @@ async function schSave(){
   try{ const r=await api("PUT",`/api/timers/${curIndex}/schedules`,{rules:schedRules});
        schedRules=r.schedules; renderSchedList(); }
   catch(e){ banner("Couldn't save: "+e.message,"err"); return; }
-  if(schEngine==="mac"){ await schLoad(); banner("Rules saved.","ok"); }   // refresh next-due
-  else { banner("Rules saved. Turn on “On this Mac” below to run them.","ok"); }
+  if(schEngine==="on"){ await schLoad(); banner("Rules saved.","ok"); }   // refresh next-due
+  else { banner("Rules saved. Turn on “Automatic” to run them.","ok"); }
 }
 
 // ---- onboarding wizard (SSE step tracker) ----
