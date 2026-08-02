@@ -181,6 +181,23 @@ async def onboard_start(body: OnboardStartBody):
     params = {"mode": body.mode, "email": body.email, "password": body.password,
               "name": body.name, "device_mac": body.device_mac, "path": CONFIG,
               "secrets_path": os.path.join(HERE, "secrets", "generated_keys.md")}
+    if body.mode == "account":
+        # The browser sends only a MAC; resolve the shared account key server-side (from
+        # the live session, else the persisted account) so the key never travels through
+        # the client. Fill name/stations from the cached timer list when we have it.
+        params["key"], name, stations = None, body.name, 4
+        sess = _account_session
+        if sess and sess.get("key"):
+            params["key"] = sess["key"]
+            want = (body.device_mac or "").upper()
+            t = next((t for t in sess.get("devices", [])
+                      if (t.get("mac") or "").upper() == want), None)
+            if t:
+                name, stations = name or t.get("name"), int(t.get("stations") or 4)
+        else:
+            acct = onboarding.read_account(CONFIG)
+            params["key"] = acct.get("network_key") if acct else None
+        params["name"], params["stations"] = name, stations
     _job.task = asyncio.create_task(_job.run(params))
     return {"ok": True, "mode": body.mode}
 
