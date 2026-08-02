@@ -31,10 +31,11 @@ app never opened** — the last step of that is proven, not just claimed.
 - Proven on **one device, macOS**; not repeated across devices/models (finalize bytes are
   **HT34 4-station** specific) or on Linux/BlueZ.
 - Enrolls for **local control only** — not registered in Orbit's cloud/app.
-- Still obtains the **account key** from a one-time cloud login (or existing config). Writing
-  a **self-generated key** to skip the cloud entirely looks feasible (the key write is
-  plaintext + unauthenticated) but is **not yet proven**, and would decouple the device from
-  the Orbit app until a factory reset.
+- Two key modes exist: **Orbit** (`provision` / `register` — account key, app + our tools
+  interoperate) and **self-key** (`provision --self-key` — our own generated key, no Orbit
+  account; the key is stashed in `secrets/` and the Orbit app can't control the device).
+  Self-key mode is **built + offline-tested but not yet live-proven** (the Orbit-key path is
+  the one proven durable on hardware).
 
 Full detail + evidence: `PROJECT_STATUS.md`, `SPIKE_provisioning.md`, `provision_proof.py`.
 

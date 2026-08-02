@@ -642,6 +642,7 @@ def test_cli_register_reuses_key_without_cloud(tmp_path, monkeypatch, capsys):
     assert new["address"] == "UUID-NEW"
     assert new["mac"] == "AA:BB:CC:DD:EE:01"
     assert new["network_key"] == TEST_KEY          # reused, not re-fetched
+    assert new["key_source"] == "orbit"            # labelled as the shared account key
 
 
 def test_cli_register_reports_catch_failure(tmp_path, monkeypatch, capsys):
@@ -955,6 +956,68 @@ def test_provision_device_times_out_when_no_bhyve():
     with fake_catch_ble([_adv("UUID-DECOY", "TV", -40)], lambda _a: None):
         with pytest.raises(O.ResolveError):
             asyncio.run(O.provision_device(TEST_KEY, scan_timeout=0.3))
+
+
+def test_cli_parse_key_flags():
+    import cli
+    assert cli._parse_key_flags(["1", "300"]) == (False, None)
+    assert cli._parse_key_flags(["--self-key"]) == (True, None)
+    assert cli._parse_key_flags(["--key=00112233445566778899aabbccddeeff"]) == \
+        (False, "00112233445566778899aabbccddeeff")
+    assert cli._parse_key_flags(["--key", "deadbeef"]) == (False, "deadbeef")
+
+
+def test_cli_provision_self_key_generates_stashes_and_labels(tmp_path, monkeypatch):
+    """--self-key: mint a random key, stash it (so it can't be lost), provision with it,
+    and label the device key_source='self'. No cloud involved."""
+    import json
+    import cli
+    import onboarding as O
+    p = tmp_path / "config.json"
+    p.write_text('{"devices": []}')
+    secrets = tmp_path / "gen_keys.md"
+    captured = {}
+
+    async def fake_provision(key, *, want_mac=None, **kw):
+        captured["key"] = key
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+
+    def no_cloud(*a, **k):
+        raise AssertionError("cloud_fetch must NOT be called in self-key mode")
+
+    monkeypatch.setattr(O, "provision_device", fake_provision)
+    monkeypatch.setattr(O, "cloud_fetch", no_cloud)
+    asyncio.run(cli.cmd_register(name="Standalone", path=str(p), ask_prompt=False,
+                                 provision=True, self_key=True, secrets_path=str(secrets)))
+    k = captured["key"]
+    assert len(k) == 32 and int(k, 16) >= 0                 # a random 16-byte hex key
+    data = json.loads(p.read_text())
+    d = data["devices"][0]
+    assert d["key_source"] == "self"
+    assert d["network_key"] == k
+    assert k in secrets.read_text()                          # stashed so it can't be lost
+
+
+def test_cli_provision_byo_key(tmp_path, monkeypatch):
+    """--key HEX: use the supplied key, labelled self."""
+    import json
+    import cli
+    import onboarding as O
+    p = tmp_path / "config.json"
+    p.write_text('{"devices": []}')
+    captured = {}
+
+    async def fake_provision(key, *, want_mac=None, **kw):
+        captured["key"] = key
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+
+    monkeypatch.setattr(O, "provision_device", fake_provision)
+    asyncio.run(cli.cmd_register(path=str(p), ask_prompt=False, provision=True,
+                                 provided_key=TEST_KEY, secrets_path=str(tmp_path / "s.md")))
+    assert captured["key"] == TEST_KEY
+    assert json.loads(p.read_text())["devices"][0]["key_source"] == "self"
 
 
 def test_cli_register_provision_uses_provision_device(tmp_path, monkeypatch):
