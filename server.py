@@ -374,35 +374,50 @@ async def put_scheduling(body: SchedulingBody):
     return {"enabled": bool(body.enabled)}
 
 
+SCHED_GRACE_MIN = 2      # bounded catch-up: fire a rule up to N min late, never hours
+
+
 async def run_due(now: datetime, fire) -> list:
-    """Fire every due rule once for minute `now`. `fire(index, valve, minutes)` is injected
-    (real one does the BLE start; tests pass a stub). Respects the enable flag, refuses while
-    onboarding holds the radio, and is idempotent per (timer, valve, minute)."""
+    """Fire every due rule for minute `now`. `fire(index, valve, minutes)` is injected (the real
+    one does the BLE start and returns True only on a CONFIRMED start; tests pass a stub).
+    Respects the enable flag, refuses while onboarding holds the radio. A rule is marked fired
+    ONLY after a confirmed start — a failed/timed-out fire is left unfired so the next tick (within
+    the grace window) retries it. Keyed by (timer, valve, date, rule-start) so the catch-up window
+    fires it once, not once per minute."""
     if _job is not None and not _job.done:       # onboarding owns the radio
         return []
     if not _host_scheduling_enabled():
         return []
-    stamp = now.strftime("%Y-%m-%d %H:%M")
     today = now.strftime("%Y-%m-%d")
-    for k in [k for k in _fired if not k[2].startswith(today)]:
+    for k in [k for k in _fired if k[2] != today]:
         _fired.discard(k)                         # prune stale days
     import scheduler
     fired = []
     for i, d in enumerate(onboarding._load_config(CONFIG).get("devices", [])):
-        for r in scheduler.due_rules(d.get("schedules", []), now):
-            key = (d.get("mac"), r["valve"], stamp)
+        for r in scheduler.due_rules(d.get("schedules", []), now, SCHED_GRACE_MIN):
+            key = (d.get("mac"), r["valve"], today, r["start"])
             if key in _fired:
                 continue
-            _fired.add(key)
-            await fire(i, r["valve"], r["minutes"])
-            fired.append(key)
+            try:
+                ok = await fire(i, r["valve"], r["minutes"])
+            except Exception:  # noqa: BLE001 — BLE hiccup: leave unfired so we retry next tick
+                ok = False
+            if ok:
+                _fired.add(key); fired.append(key)
+            # else: not marked -> retried on the next tick while still within the grace window
     return fired
 
 
-async def _fire_start(index: int, valve: int, minutes: int):
-    """The real firing action: a serialized BLE start for `minutes` (device auto-stops)."""
+async def _fire_start(index: int, valve: int, minutes: int) -> bool:
+    """Serialized BLE start for `minutes` (device auto-stops). Returns True only if the read-back
+    CONFIRMS that valve is watering — so run_due retries a failed start instead of losing the run.
+    Re-issuing start on an already-watering valve is harmless (it just resets the duration)."""
     async with _ble_lock:
-        await _device(str(index)).start(int(valve), int(minutes) * 60)
+        try:
+            st = await _device(str(index)).start(int(valve), int(minutes) * 60)
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(st.is_watering and st.active_zone == int(valve))
 
 
 async def _scheduler_loop():
