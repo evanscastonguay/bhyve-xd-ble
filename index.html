@@ -111,8 +111,11 @@
     <!-- mode: Schedule (author rules; engine wired later) -->
     <div id="body_schedule" style="display:none">
       <div class="card">
-        <div class="hint" style="margin-top:0">Saved schedules don't run yet — the scheduling
-          engine comes next. For now this just stores when you'd like each valve to water.</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">
+          <input type="checkbox" id="sch_enable" onchange="schToggleEngine()">
+          Run these schedules <span class="min">— while this Mac is on & in Bluetooth range</span>
+        </label>
+        <div class="hint" id="sch_note" style="margin-top:0"></div>
         <div id="sch_list" style="margin:12px 0"></div>
         <div class="schadd">
           <select id="sch_valve" title="valve"></select>
@@ -373,7 +376,21 @@ function buildScheduleForm(stations){
 async function schLoad(){
   try{ const r=await api("GET",`/api/timers/${curIndex}/schedules`); schedRules=r.schedules||[]; }
   catch(e){ schedRules=[]; banner("Couldn't load schedules: "+e.message,"err"); }
+  try{ const s=await api("GET","/api/scheduling"); $("#sch_enable").checked=!!s.enabled; }
+  catch(_){ $("#sch_enable").checked=false; }
+  schUpdateNote();
   renderSchedList();
+}
+function schUpdateNote(){
+  $("#sch_note").textContent = $("#sch_enable").checked
+    ? "On: this Mac triggers each valve at its time. If the Mac is asleep or out of Bluetooth range, that run is missed."
+    : "Off: schedules are saved but nothing runs them yet.";
+}
+async function schToggleEngine(){
+  try{ await api("PUT","/api/scheduling",{enabled:$("#sch_enable").checked});
+       banner($("#sch_enable").checked?"Host scheduling ON (runs while this Mac is on).":"Host scheduling off.","ok"); }
+  catch(e){ banner("Couldn't change: "+e.message,"err"); $("#sch_enable").checked=!$("#sch_enable").checked; }
+  schUpdateNote();
 }
 function renderSchedList(){
   $("#sch_list").innerHTML = schedRules.length
