@@ -926,6 +926,116 @@ def test_proof_evaluator_gates_correctly():
     assert evaluate_trial(False, True, [True, False, True])[0] is False
 
 
+async def _drive_onboard(gen, gate, choices):
+    """Drive the onboard_flow async generator; resume the gate at each waiting_user step
+    with choices[step_id] (None if absent)."""
+    events = []
+    while True:
+        try:
+            e = await gen.__anext__()
+        except StopAsyncIteration:
+            break
+        events.append(e)
+        if e["state"] == "waiting_user":
+            gate.resume(choices.get(e["id"]))
+    return events
+
+
+def _onboard_device_from_cloud(mac="AA:BB:CC:DD:EE:01"):
+    return {"name": "Yard", "mac": mac, "network_key": TEST_KEY, "stations": 4}
+
+
+async def _fake_provision(key, *, want_mac=None, **kw):
+    st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+    return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+
+
+def test_onboard_flow_orbit_success(tmp_path, monkeypatch):
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+
+    async def fake_cloud(email, pw):
+        return [_onboard_device_from_cloud()]
+
+    monkeypatch.setattr(O, "cloud_fetch", fake_cloud)
+    monkeypatch.setattr(O, "provision_device", _fake_provision)
+    gate = O.OnboardGate()
+    params = {"mode": "orbit", "email": "me@x.com", "password": "pw",
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(p)}
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_reset": None}))
+    assert events[-1]["id"] == "save" and events[-1]["verified"]
+    d = json.loads(p.read_text())["devices"][0]
+    assert d["key_source"] == "orbit" and d["network_key"] == TEST_KEY
+    assert TEST_KEY not in json.dumps(events)            # key never in an event
+
+
+def test_onboard_flow_auth_fail_then_self_key(tmp_path, monkeypatch):
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+
+    async def bad_cloud(email, pw):
+        raise O.AuthError("bad creds")
+
+    monkeypatch.setattr(O, "cloud_fetch", bad_cloud)
+    monkeypatch.setattr(O, "provision_device", _fake_provision)
+    gate = O.OnboardGate()
+    params = {"mode": "orbit", "email": "me@x.com", "password": "wrong",
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(p),
+              "secrets_path": str(tmp_path / "s.md")}
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate,
+                                        {"fallback_choice": "self_key", "await_reset": None}))
+    assert any(e["id"] == "fallback_choice" for e in events)
+    d = json.loads(p.read_text())["devices"][0]
+    assert d["key_source"] == "self"
+    assert d["network_key"] not in json.dumps(events)    # generated key never in an event
+
+
+def test_onboard_flow_first_user_no_device_then_self_key(tmp_path, monkeypatch):
+    import onboarding as O
+    p = tmp_path / "config.json"
+
+    async def empty_cloud(email, pw):
+        return []                                        # logged in, but no device on account
+
+    monkeypatch.setattr(O, "cloud_fetch", empty_cloud)
+    monkeypatch.setattr(O, "provision_device", _fake_provision)
+    gate = O.OnboardGate()
+    params = {"mode": "orbit", "email": "me@x.com", "password": "pw", "path": str(p),
+              "secrets_path": str(tmp_path / "s.md")}
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate,
+                                        {"fallback_choice": "self_key", "await_reset": None}))
+    fb = next(e for e in events if e["id"] == "fallback_choice")
+    assert "account" in fb["instruction"].lower()        # explains the first-user reason
+    assert events[-1]["id"] == "save"
+
+
+def test_onboard_flow_app_first_then_retry_succeeds(tmp_path, monkeypatch):
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    calls = {"n": 0}
+
+    async def flaky_cloud(email, pw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise O.AuthError("first attempt fails")
+        return [_onboard_device_from_cloud()]
+
+    monkeypatch.setattr(O, "cloud_fetch", flaky_cloud)
+    monkeypatch.setattr(O, "provision_device", _fake_provision)
+    gate = O.OnboardGate()
+    params = {"mode": "orbit", "email": "me@x.com", "password": "pw",
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(p)}
+    events = asyncio.run(_drive_onboard(
+        O.onboard_flow(params, gate), gate,
+        {"fallback_choice": "orbit_app_first", "app_instructions": None, "await_reset": None}))
+    assert calls["n"] == 2                                # retried after the app step
+    assert any(e["id"] == "app_instructions" for e in events)
+    assert json.loads(p.read_text())["devices"][0]["key_source"] == "orbit"
+
+
 def test_provision_device_refuses_multiple_fresh_devices():
     """SAFETY (P0): with >1 fresh B-Hyve present, provision_device must refuse and write
     the key to NEITHER — never spray the account key onto an unknown device."""
