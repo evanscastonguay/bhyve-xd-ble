@@ -12,7 +12,10 @@ bytes out) — the BLE send/verify lives in the caller; that keeps it offline-te
 """
 from __future__ import annotations
 
-from bhyve_xd import _fb, _fv, _wrap, iter_fields
+import asyncio
+import struct
+
+from bhyve_xd import FRAME_MAGIC, MSG_HEADER, _fb, _fv, _keystream_block, _wrap, iter_fields
 
 # IpcMsg field numbers (cross-validated + replay-proven)
 _F_SET_PROGRAM = 19
@@ -122,3 +125,65 @@ def parse_active_flags(inner_msgs: list[bytes]) -> int | None:
                     if sfn == 1 and isinstance(sv, int):
                         return sv
     return None
+
+
+def encode_push_frames(rules: list[dict]) -> dict:
+    """Pure: the ordered framed writes to store the config's rules as on-device programs —
+    one setProgramSchedule per mapped rule, then setActivePrograms(active_mask). Returns
+    {frames, active_mask, warnings, programs}."""
+    m = program_from_rules(rules)
+    frames = [encode_set_program_schedule(p["program_id"], p["start_mins"], p["stations"])
+              for p in m["programs"]]
+    frames.append(encode_set_active(m["active_mask"]))
+    return {"frames": frames, "active_mask": m["active_mask"],
+            "warnings": m["warnings"], "programs": m["programs"]}
+
+
+def _decode_session_notifs(sess) -> list[bytes]:
+    """Decrypt a session's collected notifications (multi-block AES-CTR, per-frame CRC resync)
+    and split into inner protobuf messages."""
+    iv, key = sess._iv, sess._dev.key
+    stream = bytearray(); hint = sess._rx
+    for v in list(sess._notifs):
+        if len(v) < 4 or v[0] != FRAME_MAGIC:
+            continue
+        ln = v[1]; ct = v[2:2+ln]
+        if len(v) < 2+ln+2:
+            continue
+        crc = struct.unpack("<H", v[2+ln:2+ln+2])[0]
+        for off in range(-8, 4000):
+            c = (hint + off) & 0xFFFFFFFF
+            pt = b"".join(bytes(a ^ b for a, b in zip(ct[i:i+16], _keystream_block(key, iv, c+i//16)))
+                          for i in range(0, len(ct), 16))
+            if (sum(pt) + FRAME_MAGIC + ln) & 0xFFFF == crc:
+                stream += pt; hint = (c + (len(ct)+15)//16) & 0xFFFFFFFF; break
+    msgs, i = [], 0
+    while True:
+        j = stream.find(MSG_HEADER, i)
+        if j < 0 or j+6 > len(stream):
+            break
+        L = stream[j+4]; msgs.append(stream[j+6:j+4+L]); i = j + max(L+4, 1)
+    return msgs
+
+
+async def read_active_mask(sess, *, wait: float = 1.5) -> int | None:
+    """Query getActivePrograms and return the device's activeProgramFlags."""
+    sess._notifs.clear()
+    await sess._send(encode_get_active())
+    await asyncio.sleep(wait)
+    return parse_active_flags(_decode_session_notifs(sess))
+
+
+async def push_program_to_device(dev, rules: list[dict]) -> dict:
+    """Open a session (arms), write the mapped programs + active mask, read back the active
+    flags, and set dev.device_active_mask so later control sessions re-enable them. Returns
+    {active_mask, verified, warnings}. The caller persists the mask to config."""
+    info = encode_push_frames(rules)
+    async with dev.session() as sess:
+        await sess.arm()                     # set the device clock (schedule times are local)
+        for f in info["frames"]:
+            await sess._send(f)
+        active = await read_active_mask(sess)
+    dev.device_active_mask = info["active_mask"]
+    return {"active_mask": info["active_mask"], "verified": (active == info["active_mask"]),
+            "warnings": info["warnings"]}
