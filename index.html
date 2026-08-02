@@ -218,10 +218,14 @@ function render(st){
   const wet=st.is_watering;
   const el=$("#state"); el.textContent=wet?`watering`:`idle`;
   el.className="pill "+(wet?"wet":"idle");
-  $("#remain").textContent=(wet&&st.seconds_remaining)?`${st.seconds_remaining}s remaining`:"";
+  const secs=st.seconds_remaining||0;
+  $("#remain").textContent = wet
+    ? (st.active_zone ? `Valve ${st.active_zone} · ${secs}s remaining`
+                      : `${secs}s remaining (zone unknown)`)
+    : "";
   document.querySelectorAll(".dot").forEach(d=>d.classList.remove("on"));
-  // we don't get the active zone number back reliably; light all if watering
-  if(wet)document.querySelectorAll(".dot").forEach(d=>d.classList.add("on"));
+  // light ONLY the valve the device reports as active (active_zone, 1-indexed)
+  if(wet && st.active_zone){ const dot=$("#dot"+st.active_zone); if(dot) dot.classList.add("on"); }
 }
 
 async function refresh(){

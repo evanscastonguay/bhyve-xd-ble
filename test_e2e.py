@@ -152,7 +152,8 @@ class FakeTimer:
     def _status_plaintext(self) -> bytes:
         body = B._fb(1, self.mac_bytes) + B._fv(7, self.clock)
         if self.watering:
-            sub = B._fv(1, 4) + B._fb(6, B._fv(7, self.seconds or 0))
+            # field 6 = active run: tfn1 = 1-indexed station, tfn7 = seconds (mirrors real device)
+            sub = B._fv(1, 4) + B._fb(6, B._fv(1, self.station or 0) + B._fv(7, self.seconds or 0))
         else:
             sub = B._fv(1, 1)
         body += B._fb(16, sub)
@@ -259,6 +260,40 @@ def test_status_reads_clock_and_idle():
     assert st.device_mac == TEST_MAC
     assert st.is_watering is False and st.run_state == 1
     assert st.device_time == t.clock
+
+
+# Real decrypted status bytes captured live from the device (Smart Hose Tap Timer):
+# WATERING = Valve 2 running 300s; IDLE = after stop. Used to prove active_zone parsing.
+_REAL_WATERING = bytes.fromhex(
+    "aa775a0f5b000a06446755d871b038cfd5bdd3068201480804120f0802120b10001a05080210ac02"
+    "2000321508021800200228ac0232070800100218ac0238ac023a00480050006a0408002000720318"
+    "89167a0082010800000000000000000939")
+_REAL_IDLE = bytes.fromhex(
+    "aa775a0f37000a06446755d871b038e3d5bdd3068201240800120208003a00480050006a04080020"
+    "0072031889167a0082010800000000000000006296")
+
+
+def test_active_zone_parsed_from_real_watering_capture():
+    """PROOF (real device bytes): while Valve 2 waters, the status carries the active
+    station (field 16->6->tfn1 = 2, 1-indexed) — so the UI can light only that valve."""
+    st = parse_reply(_REAL_WATERING)
+    assert st.is_watering is True and st.seconds_remaining == 300
+    assert st.active_zone == 2                       # matches the physical Valve 2
+    assert st.to_dict()["active_zone"] == 2          # surfaced to the REST/UI layer
+
+
+def test_active_zone_none_when_idle_real_capture():
+    st = parse_reply(_REAL_IDLE)
+    assert st.is_watering is False
+    assert st.active_zone is None                    # no active-run block when idle
+    assert st.to_dict()["active_zone"] is None
+
+
+def test_fake_status_reports_active_zone():
+    """The fake now mirrors the wire format, so the whole stack can assert active_zone."""
+    t = FakeTimer(); t.primed = True; t.watering = True; t.station = 3; t.seconds = 120
+    st = parse_reply(t._status_plaintext())
+    assert st.is_watering and st.active_zone == 3
 
 
 def test_start_confirms_watering():

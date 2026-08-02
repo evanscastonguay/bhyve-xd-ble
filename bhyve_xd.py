@@ -194,6 +194,7 @@ class DeviceStatus:
     run_state: int | None = None       # 1 = idle, 4 = watering
     seconds_remaining: int | None = None
     is_watering: bool = False
+    active_zone: int | None = None      # 1-indexed station currently watering (None if idle)
     device_mac: str | None = None      # "AA:BB:CC:DD:EE:FF" (reply field 1)
 
     @property
@@ -210,6 +211,7 @@ class DeviceStatus:
             "is_watering": self.is_watering,
             "run_state": self.run_state,
             "seconds_remaining": self.seconds_remaining,
+            "active_zone": self.active_zone,
         }
 
 
@@ -228,10 +230,12 @@ def parse_reply(pt: bytes) -> DeviceStatus | None:
                 if sfn == 1 and swt == 0:
                     st.run_state = sv
                     st.is_watering = (sv == 4)
-                elif sfn == 6 and swt == 2:
+                elif sfn == 6 and swt == 2:      # active-run submessage (present only while watering)
                     st.is_watering = True
                     for tfn, twt, tv in iter_fields(sv):
-                        if tfn == 7 and twt == 0:
+                        if tfn == 1 and twt == 0:
+                            st.active_zone = tv   # 1-indexed station (verified live: Valve 2 -> 2)
+                        elif tfn == 7 and twt == 0:
                             st.seconds_remaining = tv
     return st
 
