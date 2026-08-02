@@ -516,10 +516,11 @@ async def provision_device(network_key_hex: str, *, want_mac: str | None = None,
             try:
                 # THE provisioning step: write 0x0100 || key to 6c76 (plaintext).
                 await client.write_gatt_char(PROVISION_CHAR, payload, response=True)
-                # Verify with the normal session on the same connection (device now keyed).
+                # Run the app's enrollment setup sequence to PERSIST the key (not a plain
+                # arm() — includes the station-config that finalizes it), then verify.
                 sess = BHyveXD(dev.address, network_key_hex, tz_offset_sec=tz).session(client=client)
                 await sess.__aenter__()
-                await sess.arm()
+                await sess.provision_setup()
                 st = await sess.read_status()
             except Exception:
                 try:
