@@ -58,13 +58,19 @@ So the box clones only product-relevant files. Verified by usage analysis (impor
   bhyve_xd, schedule, scheduler, schedule_device"` OK. Do it via git mv (preserve history), one PR.
 - **Proves:** the tree is only what the product needs — a clean base to deploy.
 
-### P1 — Provision (no device writes)
+### P1 — Provision (no device writes) ✅ DONE 2026-08-02
 - On `bhyve-linux`: `git clone` the repo (or rsync), `python3 -m venv venv`, `pip install -r
   requirements.txt`. Install any BlueZ deps if pip/bleak need them (`libglib2.0`, dbus present by
   default on 24.04).
 - Confirm: `python -c "import bleak, fastapi, uvicorn, cryptography, aiohttp"`; a **read-only BLE
   scan** that sees a device advertising the `fe32` service (proves bleak↔BlueZ↔adapter works).
 - **Proves:** the code runs and the radio is usable on the box.
+- **Result:** private repo → anon `git clone` failed, so deployed by **rsync** to `~/bhyve-xd-ble`
+  (excluding `venv/ .git/ secrets/ config.json`). venv built; runtime + product imports OK. Radio
+  proof: scan saw **"New Timer" `AA:BB:CC:DD:EE:01`** (rssi −57); a **read-only** connect + GATT
+  discovery confirmed **`fe32`** with chars 6c71/6c76/6c72/6c73 (no writes, no arm).
+- **⚠ Finding for P2:** timers do **NOT** advertise `fe32` — it's post-connect GATT. On Linux,
+  connect by **MAC**, don't filter scans by service UUID. `config.json`/`secrets/` not yet on the box.
 
 ### P2 — Config + live status ⛳
 - Create `/home/pi/.../config.json` on the box with `address = AA:BB:CC:DD:EE:01`, `mac` same,
