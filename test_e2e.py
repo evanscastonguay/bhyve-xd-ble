@@ -1086,8 +1086,8 @@ def test_onboard_flow_first_user_no_device_then_self_key(tmp_path, monkeypatch):
               "secrets_path": str(tmp_path / "s.md")}
     events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate,
                                         {"fallback_choice": "self_key", "await_reset": None}))
-    fb = next(e for e in events if e["id"] == "fallback_choice")
-    assert "account" in fb["instruction"].lower()        # explains the first-user reason
+    gk_fail = next(e for e in events if e["id"] == "get_key" and e["state"] == "failed")
+    assert "account" in gk_fail["instruction"].lower()   # the reason is on the failed step
     assert events[-1]["id"] == "save"
 
 
@@ -1114,6 +1114,79 @@ def test_onboard_flow_app_first_then_retry_succeeds(tmp_path, monkeypatch):
     assert calls["n"] == 2                                # retried after the app step
     assert any(e["id"] == "app_instructions" for e in events)
     assert json.loads(p.read_text())["devices"][0]["key_source"] == "orbit"
+
+
+def test_onboard_flow_marks_get_key_failed_on_auth_fail(tmp_path, monkeypatch):
+    """Bug fix: a failed login must transition get_key to 'failed' (not stay 'working'),
+    before the fallback_choice."""
+    import onboarding as O
+
+    async def bad_cloud(email, pw):
+        raise O.AuthError("bad creds")
+
+    monkeypatch.setattr(O, "cloud_fetch", bad_cloud)
+    monkeypatch.setattr(O, "provision_device", _fake_provision)
+    gate = O.OnboardGate()
+    params = {"mode": "orbit", "email": "me@x.com", "password": "wrong",
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(tmp_path / "c.json"),
+              "secrets_path": str(tmp_path / "s.md")}
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate,
+                                        {"fallback_choice": "self_key", "await_reset": None}))
+    gk_failed = [i for i, e in enumerate(events) if e["id"] == "get_key" and e["state"] == "failed"]
+    fb = [i for i, e in enumerate(events) if e["id"] == "fallback_choice"]
+    assert gk_failed and fb and gk_failed[0] < fb[0]
+
+
+def test_onboard_flow_gated_steps_emit_resolved(tmp_path, monkeypatch):
+    """Bug fix: a gated step's LAST event is a resolved 'done' (so SSE replay won't
+    resurrect its buttons)."""
+    import onboarding as O
+
+    async def fake_cloud(email, pw):
+        return [_onboard_device_from_cloud()]
+
+    monkeypatch.setattr(O, "cloud_fetch", fake_cloud)
+    monkeypatch.setattr(O, "provision_device", _fake_provision)
+    gate = O.OnboardGate()
+    params = {"mode": "orbit", "email": "me@x.com", "password": "pw",
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(tmp_path / "c.json")}
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_reset": None}))
+    ar = [e for e in events if e["id"] == "await_reset"]
+    assert ar and ar[-1]["state"] == "done"          # resolved, not left waiting_user
+
+
+def test_onboard_flow_reuse_mode_no_cloud(tmp_path, monkeypatch):
+    """mode='reuse' provisions with the saved account key and NEVER logs in."""
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"devices": [{"name": "Old", "mac": "AA:BB:CC:DD:EE:FF",
+                                          "network_key": TEST_KEY, "address": "OLD", "stations": 4}]}))
+
+    async def no_cloud(*a, **k):
+        raise AssertionError("reuse mode must NOT call cloud_fetch")
+
+    monkeypatch.setattr(O, "cloud_fetch", no_cloud)
+    monkeypatch.setattr(O, "provision_device", _fake_provision)
+    gate = O.OnboardGate()
+    params = {"mode": "reuse", "device_mac": "AA:BB:CC:DD:EE:01", "path": str(p)}
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_reset": None}))
+    assert events[-1]["id"] == "save"
+    new = json.loads(p.read_text())["devices"][-1]
+    assert new["network_key"] == TEST_KEY and new["key_source"] == "orbit"
+
+
+def test_onboard_flow_reuse_no_saved_key_fails(tmp_path, monkeypatch):
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"devices": []}))
+    monkeypatch.setattr(O, "provision_device", _fake_provision)
+    gate = O.OnboardGate()
+    events = asyncio.run(_drive_onboard(
+        O.onboard_flow({"mode": "reuse", "path": str(p)}, gate), gate, {}))
+    assert any(e["id"] == "get_key" and e["state"] == "failed" for e in events)
+    assert not any(e["id"] == "save" for e in events)
 
 
 def test_provision_device_refuses_multiple_fresh_devices():
