@@ -416,20 +416,30 @@ function renderSchedList(){
         +`<button class="ghost" style="margin-left:auto;padding:4px 10px" onclick="schRemove(${i})">Remove</button></div>`).join("")
     : `<div class="min">No schedules yet.</div>`;
 }
-function schAddRule(){
-  const days=[...document.querySelectorAll("#sch_days .dchk:checked")].map(c=>+c.value);
-  if(!days.length){ banner("Pick at least one day.","err"); return; }
+function schFormDays(){ return [...document.querySelectorAll("#sch_days .dchk:checked")].map(c=>+c.value); }
+function schAddPending(){
+  // Add the current add-rule form as a rule, then reset the form so it's clearly empty.
+  const days=schFormDays();
+  if(!days.length) return false;
   schedRules.push({valve:+$("#sch_valve").value, start:$("#sch_start").value,
                    days, minutes:parseInt($("#sch_min").value)||5, enabled:true});
+  document.querySelectorAll("#sch_days .dchk").forEach(c=>c.checked=false);   // clear -> nothing pending
+  return true;
+}
+function schAddRule(){
+  if(!schAddPending()){ banner("Pick at least one day for the rule.","err"); return; }
   banner(null); renderSchedList();
 }
 function schRemove(i){ schedRules.splice(i,1); renderSchedList(); }
 async function schSave(){
+  schAddPending();                       // fold in a filled-but-not-added form row (no more trap)
+  renderSchedList();
+  if(!schedRules.length){ banner("Add a rule first (pick a valve, time, and day).","err"); return; }
   try{ const r=await api("PUT",`/api/timers/${curIndex}/schedules`,{rules:schedRules});
        schedRules=r.schedules; renderSchedList(); }
   catch(e){ banner("Couldn't save: "+e.message,"err"); return; }
-  if(schEngine==="mac"){ banner("Rules saved.","ok"); }
-  else { banner("Rules saved. Turn on scheduling below to run them.","ok"); }
+  if(schEngine==="mac"){ await schLoad(); banner("Rules saved.","ok"); }   // refresh next-due
+  else { banner("Rules saved. Turn on “On this Mac” below to run them.","ok"); }
 }
 
 // ---- onboarding wizard (SSE step tracker) ----
