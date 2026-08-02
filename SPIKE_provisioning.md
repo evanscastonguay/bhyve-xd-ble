@@ -3,6 +3,9 @@
 _Investigation only. No device reset, no implementation, until the B0 decision below.
 Written 2026-08-01 from first principles + what this project already established._
 
+> **BUILT & LIVE-VERIFIED 2026-08-01 — `provision_device` enrolled a factory-reset device
+> app-free (wrote key to `6c76`, verified by read-back, Orbit app never opened).**
+>
 > **RESOLVED 2026-08-01 — B1 capture done → B2 analysed → B3 = GO (feasible, simple).**
 > A live HCI capture (PacketLogger) of the official app enrolling a factory-reset device
 > showed provisioning is **hypothesis H1**: a single **plaintext ATT Write Request** of the
