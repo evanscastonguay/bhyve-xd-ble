@@ -476,12 +476,15 @@ class OnboardGate:
         return self._choice
 
 
-def _step(sid, title, instruction, *, state, expected_wait_s=None, verified=False, choices=None):
+def _step(sid, title, instruction, *, state, expected_wait_s=None, verified=False,
+          choices=None, options=None):
     ev = {"id": sid, "title": title, "instruction": instruction, "state": state, "verified": verified}
     if expected_wait_s is not None:
         ev["expected_wait_s"] = expected_wait_s
     if choices is not None:
         ev["choices"] = choices
+    if options is not None:                 # [{value, label}] for a device picker
+        ev["options"] = options
     return ev
 
 
@@ -498,20 +501,26 @@ def _stash_key(key, mac, path):
 
 async def _try_orbit_key(email, password, want_mac):
     """Determine whether a usable key is actually obtainable. Returns
-    (classification, chosen_device): 'key_obtained' | 'auth_failed' | 'no_device_on_account'."""
+    (classification, chosen_device, controllable_devices):
+    'key_obtained' | 'auth_failed' | 'no_device_on_account' | 'multiple_devices'.
+
+    'multiple_devices' (login OK, >1 key-bearing timer, no MAC to disambiguate) is NOT
+    a failure — the caller presents a picker. The controllable list is returned so the
+    caller can select from it without a second login."""
     try:
         devices = await cloud_fetch(email, password)
     except CloudError:                      # AuthError / MFARequired / RateLimited / conn
-        return "auth_failed", None
+        return "auth_failed", None, []
     controllable = [d for d in devices if d.get("network_key")]
     want = want_mac.upper() if want_mac else None
     if want:
         chosen = next((d for d in controllable if (d.get("mac") or "").upper() == want), None)
-    elif len(controllable) == 1:
-        chosen = controllable[0]
-    else:
-        chosen = None                       # empty, or ambiguous without a MAC
-    return ("key_obtained", chosen) if chosen else ("no_device_on_account", None)
+        return ("key_obtained" if chosen else "no_device_on_account", chosen, controllable)
+    if len(controllable) == 1:
+        return "key_obtained", controllable[0], controllable
+    if len(controllable) > 1:
+        return "multiple_devices", None, controllable
+    return "no_device_on_account", None, controllable
 
 
 async def onboard_flow(params, gate):
@@ -547,7 +556,33 @@ async def onboard_flow(params, gate):
         while key is None:
             yield _step("get_key", "Signing in to Orbit", "Fetching your account key…",
                         state="working", expected_wait_s=20)
-            klass, chosen = await _try_orbit_key(params.get("email"), params.get("password"), want_mac)
+            klass, chosen, controllable = await _try_orbit_key(
+                params.get("email"), params.get("password"), want_mac)
+            if klass == "multiple_devices":
+                # login worked, but there's more than one timer and no MAC to pick — ask.
+                yield _step("get_key", "Signed in to Orbit",
+                            "You have more than one timer on your account.",
+                            state="done", verified=True)
+                opts = [{"value": d.get("mac"), "label": d.get("name") or d.get("mac")}
+                        for d in controllable]
+                yield _step("pick_device", "Choose which timer to set up",
+                            "Your Orbit account has more than one timer. Pick the one to add.",
+                            state="waiting_user", options=opts)
+                picked = await gate.wait()
+                chosen = next((d for d in controllable
+                               if (d.get("mac") or "").upper() == (picked or "").upper()), None)
+                yield _step("pick_device", "Choose which timer to set up",
+                            f"You chose: {chosen.get('name') if chosen else picked}.",
+                            state="done", verified=True)
+                if chosen:
+                    key, key_source = chosen["network_key"], "orbit"
+                    want_mac = chosen.get("mac")
+                    name = name or chosen.get("name")
+                    stations = int(chosen.get("stations") or 4)
+                    yield _step("get_key", "Orbit account key", "Got your account key.",
+                                state="done", verified=True)
+                    break
+                continue                    # picked nothing valid — retry the loop
             if klass == "key_obtained":
                 key, key_source = chosen["network_key"], "orbit"
                 want_mac = want_mac or chosen.get("mac")
