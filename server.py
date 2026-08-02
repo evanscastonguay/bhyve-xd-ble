@@ -33,6 +33,8 @@ INDEX = os.path.join(HERE, "index.html")
 app = FastAPI(title="B-Hyve XD Local API", version="1.2.0")
 _ble_lock = asyncio.Lock()   # the radio does one thing at a time
 _job = None                  # the single in-flight onboarding job (or None)
+_account_session = None       # in-memory only: {email, key, devices}. NEVER persisted;
+                              # the persisted account (email+key) lives in config.json.
 
 
 class _OnboardJob:
@@ -100,6 +102,69 @@ class OnboardStartBody(BaseModel):
     device_mac: str | None = None
 
 
+class AccountLoginBody(BaseModel):
+    email: str = Field(description="Orbit email")
+    password: str = Field(description="Orbit password (used once, never stored)")
+
+
+def _config_macs() -> set[str]:
+    """Upper-cased MACs of timers already in config.json (to flag 'already added')."""
+    try:
+        with open(CONFIG) as f:
+            return {(d.get("mac") or "").upper() for d in json.load(f).get("devices", [])}
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+
+@app.post("/api/account/login")
+async def account_login(body: AccountLoginBody):
+    """Sign in to Orbit ONCE per account: fetch the account's timers and the shared BLE
+    key. Persists {email, key} (never the password) and caches the timer list in memory
+    so a later add needs no re-login. The network key is NEVER returned to the browser."""
+    global _account_session
+    try:
+        devices = await onboarding.cloud_fetch(body.email, body.password)
+    except onboarding.AuthError as e:
+        raise HTTPException(401, str(e)) from e
+    except onboarding.RateLimited as e:
+        raise HTTPException(429, str(e)) from e
+    except onboarding.CloudError as e:
+        raise HTTPException(502, str(e)) from e
+    controllable = [d for d in devices if d.get("network_key")]
+    if not controllable:
+        raise HTTPException(404, "no controllable timers with a BLE key on this account")
+    key = controllable[0]["network_key"]        # shared account/mesh key
+    onboarding.write_account(CONFIG, body.email, key)
+    timers = [{"name": d.get("name"), "mac": d.get("mac"),
+               "stations": int(d.get("stations") or 4)} for d in controllable]
+    _account_session = {"email": body.email, "key": key, "devices": timers}
+    have = _config_macs()
+    return {"email": body.email,
+            "timers": [{**t, "added": (t["mac"] or "").upper() in have} for t in timers]}
+
+
+@app.get("/api/account")
+async def account_get():
+    """Report account state for the UI: whether we're signed in this session, the email
+    (from the session or the persisted account), and whether a saved key exists."""
+    saved = onboarding.read_account(CONFIG)
+    email = (_account_session or {}).get("email") or (saved or {}).get("email")
+    return {"signed_in": _account_session is not None, "email": email,
+            "has_saved_key": saved is not None}
+
+
+@app.post("/api/account/forget")
+async def account_forget():
+    """Forget the account: clear the in-memory session AND remove the persisted account
+    block (devices are left untouched)."""
+    global _account_session
+    _account_session = None
+    config = onboarding._load_config(CONFIG)
+    if config.pop("account", None) is not None:
+        onboarding._atomic_write_config(CONFIG, config)
+    return {"ok": True}
+
+
 class OnboardContinueBody(BaseModel):
     choice: str | None = Field(default=None, description="for a fallback_choice step: "
                                "'orbit_app_first' | 'self_key'")
@@ -116,6 +181,23 @@ async def onboard_start(body: OnboardStartBody):
     params = {"mode": body.mode, "email": body.email, "password": body.password,
               "name": body.name, "device_mac": body.device_mac, "path": CONFIG,
               "secrets_path": os.path.join(HERE, "secrets", "generated_keys.md")}
+    if body.mode == "account":
+        # The browser sends only a MAC; resolve the shared account key server-side (from
+        # the live session, else the persisted account) so the key never travels through
+        # the client. Fill name/stations from the cached timer list when we have it.
+        params["key"], name, stations = None, body.name, 4
+        sess = _account_session
+        if sess and sess.get("key"):
+            params["key"] = sess["key"]
+            want = (body.device_mac or "").upper()
+            t = next((t for t in sess.get("devices", [])
+                      if (t.get("mac") or "").upper() == want), None)
+            if t:
+                name, stations = name or t.get("name"), int(t.get("stations") or 4)
+        else:
+            acct = onboarding.read_account(CONFIG)
+            params["key"] = acct.get("network_key") if acct else None
+        params["name"], params["stations"] = name, stations
     _job.task = asyncio.create_task(_job.run(params))
     return {"ok": True, "mode": body.mode}
 
