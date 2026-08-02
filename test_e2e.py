@@ -2007,7 +2007,7 @@ def test_run_due_fires_when_enabled(monkeypatch, tmp_path):
     now = datetime(2026, 8, 3, 6, 30)
     server = _sched_server(monkeypatch, tmp_path, True, now)
     calls = []
-    async def fake_fire(i, valve, minutes): calls.append((i, valve, minutes))
+    async def fake_fire(i, valve, minutes): calls.append((i, valve, minutes)); return True
     fired = asyncio.run(server.run_due(now, fake_fire))
     assert calls == [(0, 2, 7)] and len(fired) == 1
 
@@ -2033,12 +2033,71 @@ def test_run_due_skipped_during_onboarding(monkeypatch, tmp_path):
     assert asyncio.run(server.run_due(now, fake_fire)) == [] and calls == []
 
 
+def test_run_due_retries_on_failed_fire(monkeypatch, tmp_path):
+    """P1: a fire that fails (raises) must NOT be marked done — the next tick retries and fires.
+    Guards against a transient BLE hiccup silently dropping a watering."""
+    from datetime import datetime
+    now = datetime(2026, 8, 3, 6, 30)
+    server = _sched_server(monkeypatch, tmp_path, True, now)
+    calls = {"n": 0}
+    async def flaky(i, valve, minutes):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("BLE timeout")     # first attempt fails
+        return True                                # second attempt confirms
+    assert asyncio.run(server.run_due(now, flaky)) == []        # tick 1: failed, nothing fired
+    fired = asyncio.run(server.run_due(now, flaky))             # tick 2 (same minute): retried
+    assert calls["n"] == 2 and len(fired) == 1
+
+
+def test_run_due_not_marked_when_unconfirmed(monkeypatch, tmp_path):
+    """A fire that returns False (not confirmed) is retried, not marked fired."""
+    from datetime import datetime
+    now = datetime(2026, 8, 3, 6, 30)
+    server = _sched_server(monkeypatch, tmp_path, True, now)
+    calls = {"n": 0}
+    async def unconfirmed(i, valve, minutes):
+        calls["n"] += 1; return calls["n"] >= 2   # False first, True second
+    asyncio.run(server.run_due(now, unconfirmed))
+    asyncio.run(server.run_due(now, unconfirmed))
+    assert calls["n"] == 2                          # retried until confirmed
+
+
+def test_run_due_catch_up_bounded(monkeypatch, tmp_path):
+    """P1: fire a rule up to the grace window late (server just started / slow tick), but never
+    hours late."""
+    from datetime import datetime, timedelta
+    base = datetime(2026, 8, 3, 6, 30)
+    server = _sched_server(monkeypatch, tmp_path, True, base)   # rule at 06:30 today
+    async def fire_ok(i, valve, minutes): return True
+    # 1 minute late -> within grace -> fires
+    monkeypatch.setattr(server, "_fired", set(), raising=False)
+    assert len(asyncio.run(server.run_due(base + timedelta(minutes=1), fire_ok))) == 1
+    # 30 minutes late -> beyond grace -> does NOT fire
+    monkeypatch.setattr(server, "_fired", set(), raising=False)
+    assert asyncio.run(server.run_due(base + timedelta(minutes=30), fire_ok)) == []
+
+
+def test_fire_start_returns_confirmed(monkeypatch, tmp_path):
+    """_fire_start confirms via read-back: True when the commanded valve is watering."""
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [{"name": "A", "address": "FAKE-ADDR", "mac": TEST_MAC,
+                                            "network_key": TEST_KEY, "stations": 4}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    t = FakeTimer(mac=TEST_MAC)
+    with one_device(t):
+        ok = asyncio.run(server._fire_start(0, 2, 5))
+    assert ok is True and t.watering and t.station == 2       # confirmed Valve 2 watering
+
+
 def test_run_due_idempotent_within_minute(monkeypatch, tmp_path):
     from datetime import datetime
     now = datetime(2026, 8, 3, 6, 30)
     server = _sched_server(monkeypatch, tmp_path, True, now)
     calls = []
-    async def fake_fire(i, valve, minutes): calls.append((valve, minutes))
+    async def fake_fire(i, valve, minutes): calls.append((valve, minutes)); return True
     asyncio.run(server.run_due(now, fake_fire))
     asyncio.run(server.run_due(now, fake_fire))       # same minute again
     assert calls == [(2, 7)]                            # fired only once
