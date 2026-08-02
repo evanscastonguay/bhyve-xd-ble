@@ -113,19 +113,21 @@ default. Multiple timers on one account share one account key.
 - Backup checkpoint tag: **`onboarding-complete-2026-08-01`** (pushed).
 
 ## 10. Known gaps / possible future work
-- **App-free factory-reset onboarding** — **built; persistence fix in, live-unconfirmed.**
-  `onboarding.provision_device` / `cli.py provision` writes `0x0100`‖key to char `6c76`,
-  then replays the app's enrollment setup — including the **station-config (field 94)**
-  that **persists** the key — then verifies by read-back. History/correction: the first
-  live attempt (2026-08-01) decoded *in-session* but **did not persist** across a reboot
-  (a plain `arm()` isn't enough); decrypting a full app-enrollment capture revealed the
-  finalize sequence, now replayed by `provision_setup()`. **Live gate pending**: needs
-  one more factory reset to confirm the key survives a power-cycle. Mechanism +
-  correction: `SPIKE_provisioning.md`. A first proof run (`provision_proof.py`, 2026-08-02)
-  passed the negative control + key write but exposed that the **device drops the BLE link
-  right after keying** — `provision_device` is now **two-phase** (write key → reconnect →
-  finalize + verify), safety-hardened (refuses >1 fresh device), but the durability verdict
-  is **still unconfirmed** (re-run the proof).
+- **App-free factory-reset onboarding — PROVEN durable (2026-08-02).** `cli.py provision`
+  / `onboarding.provision_device` enroll a factory-fresh timer with the Orbit app never
+  opened. Mechanism: write `0x0100`‖key to char `6c76`, then (the device drops the link
+  after keying, so **two-phase**) reconnect and replay the app's finalize sequence
+  (`provision_setup`, incl. the **station-config field 94**) that persists it.
+  **Proof (`provision_proof.py`, evidence log):** on one device, a single trial —
+  **negative control confirmed the device KEYLESS first** (our key did not decode) →
+  provisioned app-free → **survived 3 consecutive power-cycles**, each re-verified in a
+  **fresh process** (status decoded + zone start/stop confirmed), app untouched. That
+  causal chain (keyless → only-our-writes → durable) is what makes it non-circular.
+  Safety: refuses to write when >1 fresh B-Hyve is nearby. History/correction:
+  `SPIKE_provisioning.md`. **Remaining caveats:** only **one physical device / macOS**
+  tested; the finalize bytes are **HT34 4-station specific**; the device is enrolled for
+  **local control only** (not registered in the Orbit cloud/app); provisioning takes ~2–3
+  min (the reconnect).
 - **Catch-once-and-hold resident server** (`PLAN_catch_and_hold.md`) — deferred; the
   stable UUID made it unnecessary for the current units.
 - **Linux/BlueZ headless host** — addresses by MAC (no rotating-UUID problem); the
