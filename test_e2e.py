@@ -2096,6 +2096,57 @@ def test_encode_get_active_is_empty_request():
     assert body == b""                                   # getActivePrograms takes no args
 
 
+# --- P4c-1: pure rule -> device-program mapping ---------------------------------
+def test_program_from_rules_single_daily():
+    import schedule_device as SD
+    r = [{"valve": 1, "start": "06:00", "days": [0, 1, 2, 3, 4, 5, 6], "minutes": 5, "enabled": True}]
+    m = SD.program_from_rules(r)
+    assert len(m["programs"]) == 1
+    p = m["programs"][0]
+    assert p["program_id"] == SD.PROGRAM_A and p["start_mins"] == [360]
+    assert p["stations"] == [(0, 300)]            # valve1 -> station0 (0-idx), 5min -> 300s
+    assert m["active_mask"] == 1                   # program A bit
+    assert m["warnings"] == []
+
+
+def test_program_from_rules_valve_and_time_conversion():
+    import schedule_device as SD
+    m = SD.program_from_rules([{"valve": 4, "start": "06:30", "days": list(range(7)),
+                                "minutes": 10, "enabled": True}])
+    p = m["programs"][0]
+    assert p["start_mins"] == [390] and p["stations"] == [(3, 600)]   # 06:30, valve4->station3, 10min
+
+
+def test_program_from_rules_one_program_per_rule_and_mask():
+    import schedule_device as SD
+    rules = [
+        {"valve": 1, "start": "06:00", "days": list(range(7)), "minutes": 5, "enabled": True},
+        {"valve": 2, "start": "20:00", "days": list(range(7)), "minutes": 5, "enabled": False},
+        {"valve": 3, "start": "07:00", "days": list(range(7)), "minutes": 5, "enabled": True},
+    ]
+    m = SD.program_from_rules(rules)
+    assert [p["program_id"] for p in m["programs"]] == [1, 2, 3]       # A, B, C
+    # active_mask has bits for enabled rules only (A + C = 0b101 = 5)
+    assert m["active_mask"] == (SD.program_bit(1) | SD.program_bit(3)) == 5
+
+
+def test_program_from_rules_specific_days_warns_daily():
+    import schedule_device as SD
+    m = SD.program_from_rules([{"valve": 1, "start": "06:00", "days": [0, 2, 4],
+                                "minutes": 5, "enabled": True}])
+    assert len(m["programs"]) == 1                 # still mapped (as daily)
+    assert any("dai" in w.lower() or "day" in w.lower() for w in m["warnings"])
+
+
+def test_program_from_rules_caps_at_six():
+    import schedule_device as SD
+    rules = [{"valve": 1, "start": f"0{i}:00", "days": list(range(7)), "minutes": 5,
+              "enabled": True} for i in range(7)]
+    m = SD.program_from_rules(rules)
+    assert len(m["programs"]) == 6                 # A..F only
+    assert any("6" in w for w in m["warnings"])    # warns the 7th is dropped
+
+
 def test_resolve_linux_returns_mac():
     import onboarding as O
     got = asyncio.run(O.resolve_address(TEST_MAC, TEST_KEY, platform_name="linux"))
