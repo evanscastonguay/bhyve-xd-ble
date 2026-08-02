@@ -2139,7 +2139,7 @@ def test_program_from_rules_valve_and_time_conversion():
     assert p["start_mins"] == [390] and p["stations"] == [(3, 600)]   # 06:30, valve4->station3, 10min
 
 
-def test_program_from_rules_one_program_per_rule_and_mask():
+def test_program_from_rules_only_enabled_rules_get_slots():
     import schedule_device as SD
     rules = [
         {"valve": 1, "start": "06:00", "days": list(range(7)), "minutes": 5, "enabled": True},
@@ -2147,9 +2147,20 @@ def test_program_from_rules_one_program_per_rule_and_mask():
         {"valve": 3, "start": "07:00", "days": list(range(7)), "minutes": 5, "enabled": True},
     ]
     m = SD.program_from_rules(rules)
-    assert [p["program_id"] for p in m["programs"]] == [1, 2, 3]       # A, B, C
-    # active_mask has bits for enabled rules only (A + C = 0b101 = 5)
-    assert m["active_mask"] == (SD.program_bit(1) | SD.program_bit(3)) == 5
+    # disabled rule consumes NO slot; the two enabled rules become programs A and B
+    assert [p["program_id"] for p in m["programs"]] == [1, 2]
+    assert [p["stations"][0][0] for p in m["programs"]] == [0, 2]      # valves 1 and 3 (0-indexed)
+    assert m["active_mask"] == (SD.program_bit(1) | SD.program_bit(2)) == 3
+
+
+def test_program_from_rules_six_enabled_cap_ignores_disabled():
+    import schedule_device as SD
+    rules = [{"valve": 1, "start": f"0{i}:00", "days": list(range(7)), "minutes": 5,
+              "enabled": False} for i in range(3)]                     # 3 disabled (no slots)
+    rules += [{"valve": 1, "start": f"1{i}:00", "days": list(range(7)), "minutes": 5,
+               "enabled": True} for i in range(6)]                     # 6 enabled -> A..F
+    m = SD.program_from_rules(rules)
+    assert len(m["programs"]) == 6                                     # disabled didn't starve the cap
 
 
 def test_program_from_rules_specific_days_warns_daily():
