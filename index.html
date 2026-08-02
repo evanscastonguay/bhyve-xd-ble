@@ -128,10 +128,8 @@
         <div style="display:grid;gap:8px">
           <label class="engopt"><input type="radio" name="engine" id="eng_off" onchange="schSetEngine('off')">
             Off <span class="min">— saved, but nothing runs them</span></label>
-          <label class="engopt"><input type="radio" name="engine" id="eng_device" onchange="schSetEngine('device')">
-            On the timer <span class="min">— recommended: runs even when this Mac is off</span></label>
           <label class="engopt"><input type="radio" name="engine" id="eng_mac" onchange="schSetEngine('mac')">
-            On this Mac <span class="min">— only while this Mac is on & in Bluetooth range</span></label>
+            On this Mac <span class="min">— runs while this Mac is on & in Bluetooth range</span></label>
         </div>
         <div class="hint" id="sch_engine_status" style="margin-top:10px"></div>
       </div>
@@ -384,47 +382,28 @@ let schEngine="off";
 async function schLoad(){
   try{ const r=await api("GET",`/api/timers/${curIndex}/schedules`); schedRules=r.schedules||[]; }
   catch(e){ schedRules=[]; banner("Couldn't load schedules: "+e.message,"err"); }
-  // Determine the current engine: on-device (a saved active mask) wins, else host, else off.
-  let host=false, mask=0;
+  let host=false;
   try{ host=!!(await api("GET","/api/scheduling")).enabled; }catch(_){}
-  try{ mask=(await api("GET",`/api/timers/${curIndex}/device-active`)).device_active_mask||0; }catch(_){}
-  schEngine = mask>0 ? "device" : host ? "mac" : "off";
+  schEngine = host ? "mac" : "off";
   $("#eng_off").checked = schEngine==="off";
-  $("#eng_device").checked = schEngine==="device";
   $("#eng_mac").checked = schEngine==="mac";
   schEngineStatus();
   renderSchedList();
 }
 function schEngineStatus(msg){
   $("#sch_engine_status").textContent = msg || (
-    schEngine==="device" ? "Running on the timer — works even if this Mac is off. Re-save & re-select after editing rules."
-    : schEngine==="mac"  ? "Running while this Mac is on. If it sleeps or leaves Bluetooth range, that run is missed."
+    schEngine==="mac" ? "Running while this Mac is on. If it sleeps or leaves Bluetooth range, that run is missed."
     : "Off — rules are saved but nothing runs them.");
 }
-// Apply an engine choice. On-device push + clear are BLE ops (~10s); guard with the spinner.
 async function schSetEngine(engine){
-  if(busy)return;
-  setBusy(true, engine==="device"?"pushing schedule to the timer… (~10s)":"applying…"); banner(null);
+  if(busy)return; setBusy(true,"applying…"); banner(null);
   try{
-    if(engine==="device"){
-      await api("PUT","/api/scheduling",{enabled:false});              // no double-run with host
-      const r=await api("POST",`/api/timers/${curIndex}/schedules/push`);
-      schEngine="device";
-      banner(`Pushed to the timer — ${bin1(r.active_mask)} program(s) active.`+(r.warnings&&r.warnings.length?" ⚠ "+r.warnings.join("; "):""),"ok");
-    }else if(engine==="mac"){
-      await api("POST",`/api/timers/${curIndex}/schedules/clear`).catch(()=>{}); // stop device runs
-      await api("PUT","/api/scheduling",{enabled:true});
-      schEngine="mac"; banner("Now running while this Mac is on.","ok");
-    }else{
-      await api("PUT","/api/scheduling",{enabled:false});
-      await api("POST",`/api/timers/${curIndex}/schedules/clear`).catch(()=>{});
-      schEngine="off"; banner("Scheduling off.","ok");
-    }
+    await api("PUT","/api/scheduling",{enabled: engine==="mac"});
+    schEngine=engine; banner(engine==="mac"?"Now running while this Mac is on.":"Scheduling off.","ok");
     schEngineStatus();
   }catch(e){ banner("Couldn't apply: "+e.message,"err"); await schLoad(); }
   setBusy(false);
 }
-function bin1(n){ let c=0; n=n||0; while(n){c+=n&1;n>>=1;} return c; }   // popcount
 function renderSchedList(){
   $("#sch_list").innerHTML = schedRules.length
     ? schedRules.map((r,i)=>`<div class="schrule"><span><b>Valve ${r.valve}</b> · ${esc(r.start)} · `
@@ -444,9 +423,8 @@ async function schSave(){
   try{ const r=await api("PUT",`/api/timers/${curIndex}/schedules`,{rules:schedRules});
        schedRules=r.schedules; renderSchedList(); }
   catch(e){ banner("Couldn't save: "+e.message,"err"); return; }
-  if(schEngine==="device"){ await schSetEngine("device"); }        // re-push updated rules to the timer
-  else if(schEngine==="mac"){ banner("Rules saved.","ok"); }
-  else { banner("Rules saved. Pick how they should run below.","ok"); }
+  if(schEngine==="mac"){ banner("Rules saved.","ok"); }
+  else { banner("Rules saved. Turn on scheduling below to run them.","ok"); }
 }
 
 // ---- onboarding wizard (SSE step tracker) ----

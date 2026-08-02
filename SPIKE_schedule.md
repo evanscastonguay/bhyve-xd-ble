@@ -130,6 +130,23 @@ our replayed schedule and reverts cleanly — non-destructive & reversible.
 `getActivePrograms`; power-cycle durability. (Day-of-week `dayFlags` bit order still TBD —
 interval/daily fully covered.)
 
+## P4c-4 — on-device EXECUTION UNVERIFIED (shipped host-driven only, 2026-08-02)
+We can **store + activate** a program byte-identically to the app (mask 0→1→0, persists across
+disconnect/power-cycle) — but the device did **NOT autonomously run** a scheduled program in any
+live test. Ruled out, each with a live run:
+- **Time basis:** scheduled at local+2 AND utc+2 (two programs, two valves) — neither fired.
+- **Missing fields:** full-fidelity program (Interval ISO, startDate/originDate, name, basicMode,
+  lastChangeId) — didn't fire.
+- **`setScheduledMode`:** the app sends the same empty `scheduledMode` (field 120) we do — not it.
+- **"Runs only while disconnected":** pushed, disconnected 2.5 min, reconnected mid-window
+  without arming — not watering.
+Remaining (unprovable over BLE here): a **physical run-mode/dial** on the timer, or the unit
+simply doesn't run schedules in this config — **we never confirmed the Orbit app's own schedules
+fire on this timer** (assumed). **Decision:** ship scheduling with **host-driven ("On this Mac")
+as the only UI engine** (verified — fires via our proven BLE start). The on-device push/encoder
+code stays (tested, unused) for when execution is confirmed. Next real step to unlock on-device:
+verify the app's schedules fire on this timer, then capture that run.
+
 ## P4b DURABILITY — PROVEN (2026-08-02), plus a critical gotcha
 On-device schedules **persist across the Mac being off**: wrote Program A + enabled (flags=1),
 disconnected 25s (timer powered), reconnected and read flags = **1** (still active). On-device
