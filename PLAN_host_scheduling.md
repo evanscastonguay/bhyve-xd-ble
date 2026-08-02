@@ -65,7 +65,10 @@ Note (in our favor): host scheduling already honors **day-of-week** (`scheduler.
 - Tests: endpoint shape; last-run recorded after a fire; UI markers served.
 - **Proves:** the user can see scheduling is alive and whether the last run succeeded.
 
-### P3 — Live end-to-end on the Mac ⛳ (user, hose off)
+### P3 — Live end-to-end on the Mac ⛳ — DONE (PASS, 2026-08-02)
+Armed Valve 1 @ +3 min via the API, enabled "On this Mac"; the server's background loop fired at
+16:32:01 and read-back CONFIRMED watering (`last_runs` ok:true). Host scheduling works on the Mac.
+
 - Enable "On this Mac", add a rule ~2–3 min out, keep the server running, and confirm the
   **background loop opens the valve at the scheduled minute** (observe via status/log; hose off).
   Confirm the status line reflects the successful run.
