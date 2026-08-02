@@ -35,8 +35,6 @@
   #busy{display:none;align-items:center;gap:10px;color:var(--drop);font-size:13px;margin:8px 0}
   .spin{width:14px;height:14px;border:2px solid #2b3440;border-top-color:var(--drop);border-radius:50%;animation:s .8s linear infinite}
   @keyframes s{to{transform:rotate(360deg)}}
-  #log{max-width:560px;background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:12px;
-       font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--mut);height:130px;overflow:auto;white-space:pre-wrap}
   .ok{color:#3fb950}.err{color:#f85149}.warn{color:#d29922}
   .hint{color:var(--mut);font-size:12px;margin-top:10px;line-height:1.5}
   .apphead{display:flex;align-items:flex-start;gap:12px;max-width:560px;margin-bottom:16px}
@@ -58,7 +56,6 @@
   <div class="apphead">
     <div>
       <h1>🚰 B-Hyve XD — Local Control</h1>
-      <div class="sub">Direct Bluetooth · no cloud · no hub</div>
     </div>
     <button class="chip" id="acct_chip" onclick="showAccount()" title="Orbit account">No account</button>
   </div>
@@ -80,14 +77,12 @@
       <div id="tabs" class="tabs"></div>
       <div class="ctlhead">
         <b id="ctl_name">—</b>
-        <span id="ctl_meta" class="min"></span>
         <span style="margin-left:auto;display:flex;gap:8px">
           <button class="ghost" onclick="startAdd()">＋ Add</button>
           <button class="ghost" onclick="removeCurrent()" title="Remove this timer from the app">🗑 Remove</button>
         </span>
       </div>
       <div class="statusrow" style="margin-top:12px">
-        <span>Clock: <b id="clock">—</b></span>
         <span>State: <span id="state" class="pill idle">—</span></span>
         <span id="remain" class="min"></span>
         <button class="ghost" style="margin-left:auto" onclick="refresh()">↻ Refresh</button>
@@ -188,11 +183,10 @@
     </div>
   </div>
 
-  <div id="log"></div>
 
 <script>
 const $=(s)=>document.querySelector(s);
-const log=(m,c="")=>{const t=new Date().toLocaleTimeString();$("#log").innerHTML+=`<div class="${c}">[${t}] ${m}</div>`;$("#log").scrollTop=1e9;};
+const WAKE=" — if it timed out, press a button on the timer to wake it, then retry.";
 let busy=false;
 let curDevice=null;   // selected timer (0-based index as a string); null = server default
 function setBusy(on,txt){busy=on;$("#busy").style.display=on?"flex":"none";if(txt)$("#busytxt").textContent=txt;
@@ -214,7 +208,6 @@ async function api(method,path,body){
 }
 
 function render(st){
-  $("#clock").textContent=st.clock||"—";
   const wet=st.is_watering;
   const el=$("#state"); el.textContent=wet?`watering`:`idle`;
   el.className="pill "+(wet?"wet":"idle");
@@ -229,31 +222,35 @@ function render(st){
 }
 
 async function refresh(){
-  if(busy)return; setBusy(true,"reading status… (~10s)"); log("→ status…");
-  try{const st=await api("GET","/api/status"); render(st); log(`✓ clock=${st.clock} watering=${st.is_watering}`,"ok");}
-  catch(e){log("✗ status: "+e.message,"err");}
+  if(busy)return; setBusy(true,"reading status… (~10s)"); banner(null);
+  try{ render(await api("GET","/api/status")); }
+  catch(e){ banner("Couldn't read status: "+e.message+WAKE,"err"); }
   setBusy(false);
 }
 async function startZone(z){
   if(busy)return; const mins=parseFloat($("#min"+z).value)||5;
-  setBusy(true,`starting zone ${z}… (~10s)`); log(`→ START zone ${z} for ${mins} min…`);
+  setBusy(true,`starting Valve ${z}… (~10s)`); banner(null);
   try{const r=await api("POST",`/api/zones/${z}/start`,{minutes:mins}); render(r);
-    log(r.confirmed_watering?`✓ zone ${z} CONFIRMED watering (${r.seconds_remaining}s)`:`⚠ sent but not confirmed`,r.confirmed_watering?"ok":"warn");}
-  catch(e){log("✗ start: "+e.message,"err");}
+    banner(r.confirmed_watering?`Valve ${z} watering (${r.seconds_remaining}s).`
+                               :`Valve ${z}: sent but not confirmed — try again.`,
+           r.confirmed_watering?"ok":"err");}
+  catch(e){ banner(`Couldn't start Valve ${z}: `+e.message+WAKE,"err"); }
   setBusy(false);
 }
 async function stopZone(z){
-  if(busy)return; setBusy(true,`stopping zone ${z}… (~10s)`); log(`→ STOP zone ${z}…`);
+  if(busy)return; setBusy(true,`stopping Valve ${z}… (~10s)`); banner(null);
   try{const r=await api("POST",`/api/zones/${z}/stop`); render(r);
-    log(r.confirmed_idle?`✓ zone ${z} CONFIRMED idle`:`⚠ zone ${z} stop not confirmed`,r.confirmed_idle?"ok":"warn");}
-  catch(e){log("✗ stop zone: "+e.message,"err");}
+    banner(r.confirmed_idle?`Valve ${z} stopped.`:`Valve ${z}: stop not confirmed — try again.`,
+           r.confirmed_idle?"ok":"err");}
+  catch(e){ banner(`Couldn't stop Valve ${z}: `+e.message+WAKE,"err"); }
   setBusy(false);
 }
 async function stopAll(){
-  if(busy)return; setBusy(true,"stopping all… (~10s)"); log("→ STOP all…");
+  if(busy)return; setBusy(true,"stopping all… (~10s)"); banner(null);
   try{const r=await api("POST","/api/stop"); render(r);
-    log(r.confirmed_idle?"✓ CONFIRMED idle (all)":"⚠ stop not confirmed",r.confirmed_idle?"ok":"warn");}
-  catch(e){log("✗ stop: "+e.message,"err");}
+    banner(r.confirmed_idle?"All valves stopped.":"Stop not confirmed — try again.",
+           r.confirmed_idle?"ok":"err");}
+  catch(e){ banner("Couldn't stop: "+e.message+WAKE,"err"); }
   setBusy(false);
 }
 
@@ -268,9 +265,7 @@ function buildValves(n){
         <button class="boff" onclick="stopZone(${z})">Turn OFF</button>
       </div>
     </div>`;
-  h+=`<div class="tools"><button class="ghost" onclick="stopAll()">■ Stop ALL valves</button></div>
-      <div class="hint">Each action does a full Bluetooth session (~10s). Wake the timer by pressing
-      a button on it if a command times out. “Turn OFF” stops that valve; “Stop ALL” stops every valve.</div>`;
+  h+=`<div class="tools"><button class="ghost" onclick="stopAll()">■ Stop ALL valves</button></div>`;
   $("#valves").innerHTML=h;
 }
 
@@ -311,13 +306,12 @@ function buildTabs(){
     ? devices.map((d,i)=>`<button class="tab ${i===curIndex?'active':''}" onclick="selectTimer(${i})">${esc(d.name||('Timer '+(i+1)))}</button>`).join("")
     : "";
 }
-function selectTimer(i){ if(i===curIndex)return; curIndex=i; buildTabs(); $("#log").innerHTML=""; loadSelected(); }
+function selectTimer(i){ if(i===curIndex)return; curIndex=i; buildTabs(); banner(null); loadSelected(); }
 
 async function loadSelected(){
   const d=devices[curIndex]; curDevice=String(d.index);
   $("#ctl_name").textContent=d.name||("Timer "+(curIndex+1));
-  $("#ctl_meta").textContent=`· ${d.stations||4} valves`;
-  $("#clock").textContent="—"; $("#state").textContent="reading…"; $("#state").className="pill idle";
+  $("#state").textContent="reading…"; $("#state").className="pill idle";
   buildValves(d.stations||4);
   await refresh();
 }
@@ -487,7 +481,6 @@ function wizChoose(c){ _ack(); api("POST","/api/onboard/continue",{choice:c}).ca
 async function wizDone(){
   if(es){es.close();es=null;}
   try{ const d=await api("GET","/api/devices"); curIndex=d.length?d.length-1:null; }catch(_){}
-  $("#log").innerHTML="";
   await renderApp();
   banner("Timer added — ready to control.","ok");
 }
@@ -500,7 +493,7 @@ function removeCurrent(){
   confirmBanner(`Remove "${d.name}"? It stays on the timer with its key; this only removes it from this app.`, async ()=>{
     try{
       const r=await api("DELETE",`/api/devices/${d.index}`);
-      curIndex=null; $("#log").innerHTML="";
+      curIndex=null;
       await renderApp();
       banner(`Removed ${r.removed}.`,"ok");
     }catch(e){ banner("Remove failed: "+e.message,"err"); }
