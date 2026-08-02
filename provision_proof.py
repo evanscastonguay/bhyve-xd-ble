@@ -19,6 +19,9 @@ RUN (in your own Terminal; you perform the physical reset/power-cycles at the pr
     cd path/to/bhyve-xd-ble
     ./venv/bin/python provision_proof.py                 # uses config.json device 0's key
     ./venv/bin/python provision_proof.py --device-mac=AA:BB:CC:DD:EE:01
+    ./venv/bin/python provision_proof.py --self-key --device-mac=AA:BB:CC:DD:EE:01
+        # ^ proves the STANDALONE path: generate our OWN key (no Orbit account), then the
+        #   same negative-control + power-cycle durability test. Key is stashed to secrets/.
 
 Evidence log: /tmp/provision_proof.log (contains the key -> delete after).
 """
@@ -206,10 +209,21 @@ def main():
         return
     log = Log(LOG_PATH)
     log.line(f"logging to {LOG_PATH}")
-    key = _load_key(log)
-    if not key:
-        return
     want = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--device-mac=")), None)
+    if "--self-key" in sys.argv:
+        # STANDALONE proof: mint + stash our OWN key, then prove durability with it.
+        from cli import _stash_key
+        key = os.urandom(16).hex()
+        sp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secrets", "generated_keys.md")
+        try:
+            _stash_key(key, want, sp)
+            log.line(f"SELF-KEY MODE: generated + stashed our own key (…{key[-4:]}); full key in {sp}")
+        except Exception as e:
+            log.line(f"SELF-KEY MODE: generated our own key …{key[-4:]} (stash failed: {e} — SAVE IT: {key})")
+    else:
+        key = _load_key(log)
+        if not key:
+            return
     try:
         asyncio.run(run_proof(log, key, want_mac=want))
     except KeyboardInterrupt:
