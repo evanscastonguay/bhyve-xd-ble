@@ -39,101 +39,154 @@
        font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--mut);height:130px;overflow:auto;white-space:pre-wrap}
   .ok{color:#3fb950}.err{color:#f85149}.warn{color:#d29922}
   .hint{color:var(--mut);font-size:12px;margin-top:10px;line-height:1.5}
+  .apphead{display:flex;align-items:flex-start;gap:12px;max-width:560px;margin-bottom:16px}
+  .chip{background:#21262d;color:var(--tx);font-size:12px;padding:6px 12px;border-radius:20px;margin-left:auto;white-space:nowrap}
+  .chip:hover{background:#2b3440}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .tabs:empty{display:none}
+  .tab{background:#21262d;color:var(--mut);font-size:13px;padding:7px 14px;border-radius:8px}
+  .tab.active{background:var(--blue);color:#fff}
+  .ctlhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .ctlhead b{font-size:15px}
+  .viewhead{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  #banner{max-width:560px;margin-bottom:14px;display:none;padding:10px 14px;border-radius:8px;font-size:13px}
+  #banner.err{display:block;background:#3d1518;color:#f85149;border:1px solid #5c1a1f}
+  #banner.ok{display:block;background:#12331d;color:#3fb950;border:1px solid #1c5230}
 </style>
 </head>
 <body>
-  <h1>🚰 B-Hyve XD — Local Control</h1>
-  <div class="sub">Direct Bluetooth · no cloud · no hub</div>
-
-  <div class="card" id="devcard" style="max-width:560px">
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <label id="devpick" style="font-size:13px;color:var(--mut);display:none">Timer:
-        <select id="device" onchange="onDeviceChange()"></select>
-      </label>
-      <span style="margin-left:auto;display:flex;gap:8px">
-        <button class="ghost" onclick="toggleOnboard()">＋ Add timer</button>
-        <button class="ghost" onclick="removeCurrent()" title="Remove the selected timer">🗑 Remove</button>
-      </span>
+  <div class="apphead">
+    <div>
+      <h1>🚰 B-Hyve XD — Local Control</h1>
+      <div class="sub">Direct Bluetooth · no cloud · no hub</div>
     </div>
-
-    <div id="onboard" style="display:none;margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
-      <div style="font-weight:600;margin-bottom:8px">Add a timer</div>
-
-      <!-- Screen 1: choose a path (rendered from account state) -->
-      <div id="ob_choose">
-        <div class="hint" id="ob_choose_hint" style="margin-top:0">How do you want to set it up?</div>
-        <div id="ob_addrow" style="display:none;margin:10px 0 0">
-          <button class="bon" style="width:100%;text-align:left" onclick="wizAddToAccount()">
-            ＋ Add a timer to <b id="ob_acct_email"></b> <span class="min">— no login needed</span></button>
-        </div>
-        <div style="display:grid;gap:8px;margin:10px 0">
-          <button class="bon" id="ob_btn_orbit" style="text-align:left" onclick="wizScreen('orbit')">
-            Use my Orbit account <span class="min">— the Orbit app keeps working too</span></button>
-          <button class="ghost" style="text-align:left" onclick="wizScreen('self')">
-            Standalone <span class="min">— your own key, no Orbit account (the app can't control it)</span></button>
-        </div>
-        <div id="ob_switch" style="display:none;margin-top:2px">
-          <button class="ghost" onclick="wizForget()">Use a different Orbit account</button></div>
-        <div style="margin-top:6px"><button class="ghost" onclick="toggleOnboard()">Cancel</button></div>
-      </div>
-
-      <!-- Screen 2: Orbit login (credentials only — name/MAC come from the account) -->
-      <div id="ob_orbit" style="display:none">
-        <div style="font-weight:600;margin-bottom:6px">Sign in to Orbit</div>
-        <div class="hint" style="margin-top:0;margin-bottom:10px">Used once for this account to fetch its
-          key so the Orbit app and this page share it. Your password is never stored.</div>
-        <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:420px">
-          <label for="ob_email">Email</label>
-          <input id="ob_email" type="email" oninput="orbitValidate()" placeholder="you@example.com" style="width:100%">
-          <label for="ob_pw">Password</label>
-          <input id="ob_pw" type="password" oninput="orbitValidate()" style="width:100%">
-        </div>
-        <div id="ob_orbit_err" class="err" style="display:none;margin-top:8px;font-size:13px"></div>
-        <div style="margin-top:12px;display:flex;gap:8px">
-          <button class="bon" id="ob_signin" onclick="wizLogin()" disabled>Sign in &amp; find my timers</button>
-          <button class="ghost" onclick="wizScreen('choose')">Back</button>
-        </div>
-      </div>
-
-      <!-- Screen 3: pick which account timer to add -->
-      <div id="ob_pick" style="display:none">
-        <div style="font-weight:600;margin-bottom:6px" id="ob_pick_title">Choose a timer to add</div>
-        <div class="hint" id="ob_pick_hint" style="margin-top:0;margin-bottom:10px"></div>
-        <div id="ob_pick_list" style="display:grid;gap:8px"></div>
-        <div style="margin-top:12px;display:flex;gap:8px">
-          <button class="ghost" onclick="wizScreen('choose')">Back</button></div>
-      </div>
-
-      <!-- Screen 4: standalone (own key) — name only -->
-      <div id="ob_self" style="display:none">
-        <div style="font-weight:600;margin-bottom:6px">Standalone (your own key)</div>
-        <div class="hint" style="margin-top:0;margin-bottom:10px">We generate a key just for this timer —
-          no Orbit account. The Orbit app won't control it; the key is saved to secrets/ (back it up).</div>
-        <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:420px">
-          <label for="ob_name_self">Timer name</label>
-          <input id="ob_name_self" type="text" placeholder="optional, e.g. Back Yard" style="width:100%">
-        </div>
-        <div style="margin-top:12px;display:flex;gap:8px">
-          <button class="bon" onclick="wizSelfStart()">Set up standalone</button>
-          <button class="ghost" onclick="wizScreen('choose')">Back</button>
-        </div>
-      </div>
-
-      <div id="ob_steps" style="display:none"></div>
-    </div>
+    <button class="chip" id="acct_chip" onclick="showAccount()" title="Orbit account">No account</button>
   </div>
 
-  <div class="card">
-    <div class="statusrow">
-      <span>Clock: <b id="clock">—</b></span>
-      <span>State: <span id="state" class="pill idle">unknown</span></span>
-      <span id="remain" class="min"></span>
-      <button class="ghost" style="margin-left:auto" onclick="refresh()">↻ Refresh</button>
-    </div>
-    <div id="busy"><span class="spin"></span><span id="busytxt">working… (BLE takes ~10s)</span></div>
+  <div id="banner"></div>
+
+  <!-- ============ VIEW: empty (0 timers) ============ -->
+  <div class="card" id="v_empty" style="display:none;text-align:center;padding:34px 18px">
+    <div style="font-size:34px;line-height:1">🕳️</div>
+    <div style="font-weight:600;margin:10px 0 4px">No timers yet</div>
+    <div class="hint" style="margin:0 auto 16px;max-width:340px">Register your first B-Hyve XD to
+      control its valves from here — over Bluetooth, no cloud.</div>
+    <button class="bon" onclick="startAdd()">＋ Add your first timer</button>
   </div>
 
-  <div class="card" id="valves"></div>
+  <!-- ============ VIEW: control (≥1 timer) ============ -->
+  <div id="v_control" style="display:none">
+    <div class="card">
+      <div id="tabs" class="tabs"></div>
+      <div class="ctlhead">
+        <b id="ctl_name">—</b>
+        <span id="ctl_meta" class="min"></span>
+        <span style="margin-left:auto;display:flex;gap:8px">
+          <button class="ghost" onclick="startAdd()">＋ Add</button>
+          <button class="ghost" onclick="removeCurrent()" title="Remove this timer from the app">🗑 Remove</button>
+        </span>
+      </div>
+      <div class="statusrow" style="margin-top:12px">
+        <span>Clock: <b id="clock">—</b></span>
+        <span>State: <span id="state" class="pill idle">—</span></span>
+        <span id="remain" class="min"></span>
+        <button class="ghost" style="margin-left:auto" onclick="refresh()">↻ Refresh</button>
+      </div>
+      <div id="busy"><span class="spin"></span><span id="busytxt">working… (BLE takes ~10s)</span></div>
+    </div>
+    <div class="card" id="valves"></div>
+  </div>
+
+  <!-- ============ VIEW: add (setup takeover) ============ -->
+  <div class="card" id="v_add" style="display:none">
+    <div class="viewhead"><b>Add a timer</b>
+      <button class="ghost" style="margin-left:auto" onclick="cancelAdd()">✕ Close</button></div>
+
+    <!-- choose a path (rendered from account state) -->
+    <div id="ob_choose">
+      <div class="hint" id="ob_choose_hint" style="margin-top:0">How do you want to set it up?</div>
+      <div id="ob_addrow" style="display:none;margin:10px 0 0">
+        <button class="bon" style="width:100%;text-align:left" onclick="wizAddToAccount()">
+          ＋ Add a timer to <b id="ob_acct_email"></b> <span class="min">— no login needed</span></button>
+      </div>
+      <div style="display:grid;gap:8px;margin:10px 0">
+        <button class="bon" id="ob_btn_orbit" style="text-align:left" onclick="wizScreen('orbit')">
+          Use my Orbit account <span class="min">— the Orbit app keeps working too</span></button>
+        <button class="ghost" style="text-align:left" onclick="wizScreen('self')">
+          Standalone <span class="min">— your own key, no Orbit account (the app can't control it)</span></button>
+      </div>
+    </div>
+
+    <!-- Orbit login (credentials only — name/MAC come from the account) -->
+    <div id="ob_orbit" style="display:none">
+      <div style="font-weight:600;margin-bottom:6px">Sign in to Orbit</div>
+      <div class="hint" style="margin-top:0;margin-bottom:10px">Used once for this account to fetch its
+        key so the Orbit app and this page share it. Your password is never stored.</div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:420px">
+        <label for="ob_email">Email</label>
+        <input id="ob_email" type="email" oninput="orbitValidate()" placeholder="you@example.com" style="width:100%">
+        <label for="ob_pw">Password</label>
+        <input id="ob_pw" type="password" oninput="orbitValidate()" style="width:100%">
+      </div>
+      <div id="ob_orbit_err" class="err" style="display:none;margin-top:8px;font-size:13px"></div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button class="bon" id="ob_signin" onclick="wizLogin()" disabled>Sign in &amp; find my timers</button>
+        <button class="ghost" onclick="wizScreen('choose')">Back</button>
+      </div>
+    </div>
+
+    <!-- pick which account timer to add -->
+    <div id="ob_pick" style="display:none">
+      <div style="font-weight:600;margin-bottom:6px" id="ob_pick_title">Choose a timer to add</div>
+      <div class="hint" id="ob_pick_hint" style="margin-top:0;margin-bottom:10px"></div>
+      <div id="ob_pick_list" style="display:grid;gap:8px"></div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button class="ghost" onclick="wizScreen('choose')">Back</button></div>
+    </div>
+
+    <!-- standalone (own key) — name only -->
+    <div id="ob_self" style="display:none">
+      <div style="font-weight:600;margin-bottom:6px">Standalone (your own key)</div>
+      <div class="hint" style="margin-top:0;margin-bottom:10px">We generate a key just for this timer —
+        no Orbit account. The Orbit app won't control it; the key is saved to secrets/ (back it up).</div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:420px">
+        <label for="ob_name_self">Timer name</label>
+        <input id="ob_name_self" type="text" placeholder="optional, e.g. Back Yard" style="width:100%">
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button class="bon" onclick="wizSelfStart()">Set up standalone</button>
+        <button class="ghost" onclick="wizScreen('choose')">Back</button>
+      </div>
+    </div>
+
+    <div id="ob_steps" style="display:none"></div>
+  </div>
+
+  <!-- ============ VIEW: account (takeover) ============ -->
+  <div class="card" id="v_account" style="display:none">
+    <div class="viewhead"><b>Orbit account</b>
+      <button class="ghost" style="margin-left:auto" onclick="renderApp()">✕ Close</button></div>
+    <div id="acct_signedin" style="display:none">
+      <div class="hint" style="margin-top:0">Signed in — the account key is saved on this computer, so
+        adding more timers needs no login. Your password is never stored.</div>
+      <div style="margin:10px 0;font-size:14px">Account: <b id="acct_email">—</b></div>
+      <div style="display:flex;gap:8px">
+        <button class="ghost" onclick="acctForget()">Sign out / use a different account</button>
+      </div>
+    </div>
+    <div id="acct_signedout">
+      <div class="hint" style="margin-top:0;margin-bottom:10px">Sign in to your Orbit account once to
+        share its key with this page. Optional — you can also add timers standalone. Password never stored.</div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:420px">
+        <label for="acct_in_email">Email</label>
+        <input id="acct_in_email" type="email" oninput="acctValidate()" placeholder="you@example.com" style="width:100%">
+        <label for="acct_in_pw">Password</label>
+        <input id="acct_in_pw" type="password" oninput="acctValidate()" style="width:100%">
+      </div>
+      <div id="acct_err" class="err" style="display:none;margin-top:8px;font-size:13px"></div>
+      <div style="margin-top:12px"><button class="bon" id="acct_signin" onclick="acctLogin()" disabled>Sign in</button></div>
+    </div>
+  </div>
 
   <div id="log"></div>
 
@@ -217,20 +270,52 @@ function buildValves(n){
   $("#valves").innerHTML=h;
 }
 
-async function loadDevice(){
-  try{const h=await api("GET","/api/health"); buildValves(h.stations||4);
-    log(`Loaded ${h.name} (${h.address}). Ready.`,"ok");
-    await refresh();}
-  catch(e){buildValves(4); log("health failed: "+e.message,"err");}
-}
-function onDeviceChange(){curDevice=$("#device").value; $("#log").innerHTML=""; loadDevice();}
+// ---- view state machine: empty | control | add | account ----
+let devices=[], curIndex=null, acct={signed_in:false,has_saved_key:false,email:null};
+const VIEWS=["empty","control","add","account"];
+function showView(name){ for(const v of VIEWS) $("#v_"+v).style.display=(v===name)?"block":"none"; }
 
-async function loadDevices(){
-  const devs=await api("GET","/api/devices");     // curDevice may be null -> no ?device
-  const sel=$("#device");
-  sel.innerHTML=devs.map(d=>`<option value="${d.index}">${d.name}</option>`).join("");
-  $("#devpick").style.display=devs.length>1?"inline":"none";
-  return devs;
+function banner(msg,cls){ const b=$("#banner");
+  if(!msg){ b.className=""; b.innerHTML=""; return; }   // hide via class only (CSS #banner{display:none}); never inline style, which would override the .err/.ok reveal
+  b.className=cls||"ok"; b.textContent=msg; }
+function confirmBanner(msg,onYes){ const b=$("#banner"); b.className="err";
+  b.innerHTML=`${esc(msg)} <button class="bon" id="cf_yes" style="margin-left:10px;padding:4px 10px">Yes</button>`
+    +` <button class="ghost" id="cf_no" style="padding:4px 10px">Cancel</button>`;
+  $("#cf_yes").onclick=()=>{ banner(null); onYes(); };
+  $("#cf_no").onclick=()=>banner(null); }
+
+async function fetchAccount(){
+  try{ acct=await api("GET","/api/account"); }
+  catch(_){ acct={signed_in:false,has_saved_key:false,email:null}; }
+  const known=acct.signed_in||acct.has_saved_key;
+  $("#acct_chip").textContent = known ? ("Orbit: "+(acct.email||"account")) : "No account";
+  return acct;
+}
+
+async function renderApp(){
+  if(es){es.close();es=null;}
+  banner(null);
+  await fetchAccount();
+  try{ devices=await api("GET","/api/devices"); }catch(_){ devices=[]; }
+  if(!devices.length){ curIndex=null; curDevice=null; showView("empty"); return; }
+  if(curIndex==null || curIndex>=devices.length) curIndex=0;
+  buildTabs(); showView("control"); await loadSelected();
+}
+
+function buildTabs(){
+  $("#tabs").innerHTML = devices.length>=2
+    ? devices.map((d,i)=>`<button class="tab ${i===curIndex?'active':''}" onclick="selectTimer(${i})">${esc(d.name||('Timer '+(i+1)))}</button>`).join("")
+    : "";
+}
+function selectTimer(i){ if(i===curIndex)return; curIndex=i; buildTabs(); $("#log").innerHTML=""; loadSelected(); }
+
+async function loadSelected(){
+  const d=devices[curIndex]; curDevice=String(d.index);
+  $("#ctl_name").textContent=d.name||("Timer "+(curIndex+1));
+  $("#ctl_meta").textContent=`· ${d.stations||4} valves`;
+  $("#clock").textContent="—"; $("#state").textContent="reading…"; $("#state").className="pill idle";
+  buildValves(d.stations||4);
+  await refresh();
 }
 
 // ---- onboarding wizard (SSE step tracker) ----
@@ -249,27 +334,29 @@ function orbitValidate(){   // can't submit an empty login
   $("#ob_signin").disabled = !(val("ob_email") && $("#ob_pw").value);
 }
 
-// Render the choose screen from account state: signed-in / saved-key -> "add to <email>".
-function renderChoose(acct){
-  const known = acct && (acct.signed_in || acct.has_saved_key);
-  $("#ob_acct_email").textContent = (acct && acct.email) || "your account";
-  $("#ob_addrow").style.display   = known ? "block" : "none";
-  $("#ob_switch").style.display   = known ? "block" : "none";
-  $("#ob_btn_orbit").style.display= known ? "none"  : "block";   // saved -> re-login via "different account"
+// Render the add-flow choose screen from account state.
+function renderChoose(a){
+  const known = a && (a.signed_in || a.has_saved_key);
+  $("#ob_acct_email").textContent = (a && a.email) || "your account";
+  $("#ob_addrow").style.display    = known ? "block" : "none";
+  $("#ob_btn_orbit").style.display = known ? "none"  : "block";
   $("#ob_choose_hint").textContent = known
-    ? "You're set up with Orbit — add another timer, or:"
+    ? "Add another timer to your account, or set one up standalone:"
     : "How do you want to set it up?";
   wizScreen("choose");
 }
 
-async function toggleOnboard(){
-  const el=$("#onboard"); const show=el.style.display==="none";
-  el.style.display=show?"block":"none";
+// Enter/leave the Add-timer takeover view.
+async function startAdd(){
   if(es){es.close();es=null;}
-  if(show){
-    try{ renderChoose(await api("GET","/api/account")); }
-    catch(_){ renderChoose(null); }
-  }
+  try{ await api("POST","/api/onboard/cancel",{}); }catch(_){}   // clear any stale job
+  renderChoose(await fetchAccount());
+  showView("add");
+}
+async function cancelAdd(){
+  if(es){es.close();es=null;}
+  try{ await api("POST","/api/onboard/cancel",{}); }catch(_){}
+  await renderApp();
 }
 
 // --- Orbit account path -----------------------------------------------------
@@ -313,7 +400,7 @@ function wizSelfStart(){ startOnboard({mode:"self", name:val("ob_name_self")||nu
 
 async function startOnboard(body){
   try{ await api("POST","/api/onboard/start",body); }
-  catch(e){ alert("Couldn't start: "+e.message); return; }
+  catch(e){ banner("Couldn't start: "+e.message,"err"); return; }
   for(const s of OB_SCREENS) $("#ob_"+s).style.display="none";
   $("#ob_steps").style.display="block";
   steps={}; order=[]; $("#ob_steps").innerHTML="";
@@ -321,9 +408,29 @@ async function startOnboard(body){
   es.onmessage=(e)=>{ try{ onStep(JSON.parse(e.data)); }catch(_){} };
 }
 
-async function wizForget(){
+// ---- account view (identity, separate from timer setup) ----
+async function showAccount(){
+  if(es){es.close();es=null;}
+  await fetchAccount();
+  const known=acct.signed_in||acct.has_saved_key;
+  $("#acct_signedin").style.display=known?"block":"none";
+  $("#acct_signedout").style.display=known?"none":"block";
+  $("#acct_email").textContent=acct.email||"—";
+  $("#acct_err").style.display="none"; $("#acct_in_pw").value=""; acctValidate();
+  showView("account");
+}
+function acctValidate(){ $("#acct_signin").disabled=!(val("acct_in_email") && $("#acct_in_pw").value); }
+async function acctLogin(){
+  $("#acct_signin").disabled=true; $("#acct_err").style.display="none";
+  try{ await api("POST","/api/account/login",{email:val("acct_in_email"), password:$("#acct_in_pw").value}); }
+  catch(e){ $("#acct_err").textContent="Sign-in failed: "+e.message+" — check email/password (multi-factor accounts aren't supported).";
+            $("#acct_err").style.display="block"; acctValidate(); return; }
+  finally{ $("#acct_in_pw").value=""; }
+  banner("Signed in to Orbit.","ok"); await renderApp();
+}
+async function acctForget(){
   try{ await api("POST","/api/account/forget",{}); }catch(_){}
-  try{ renderChoose(await api("GET","/api/account")); }catch(_){ renderChoose(null); }
+  await showAccount();
 }
 
 function onStep(ev){
@@ -370,48 +477,33 @@ function renderSteps(){
 }
 
 function _ack(){ for(const id of order) if(steps[id].state==="waiting_user") steps[id]={...steps[id],state:"working"}; renderSteps(); }
-function wizContinue(){ _ack(); api("POST","/api/onboard/continue",{}).catch(e=>alert(e.message)); }
-function wizChoose(c){ _ack(); api("POST","/api/onboard/continue",{choice:c}).catch(e=>alert(e.message)); }
+function wizContinue(){ _ack(); api("POST","/api/onboard/continue",{}).catch(e=>banner(e.message,"err")); }
+function wizChoose(c){ _ack(); api("POST","/api/onboard/continue",{choice:c}).catch(e=>banner(e.message,"err")); }
 
 async function wizDone(){
   if(es){es.close();es=null;}
-  log("✓ onboarding complete","ok");
-  const devs=await loadDevices();
-  if(devs.length){curDevice=String(devs[devs.length-1].index); $("#device").value=curDevice;}
-  $("#onboard").style.display="none"; wizScreen("choose");
-  $("#log").innerHTML=""; if(devs.length) await loadDevice();
+  try{ const d=await api("GET","/api/devices"); curIndex=d.length?d.length-1:null; }catch(_){}
+  $("#log").innerHTML="";
+  await renderApp();
+  banner("Timer added — ready to control.","ok");
 }
 
 // live countdown for working steps
 setInterval(()=>{ if($("#ob_steps").style.display!=="none" && order.some(id=>steps[id].state==="working")) renderSteps(); },1000);
 
-async function removeCurrent(){
-  let devs; try{ devs=await api("GET","/api/devices"); }catch(e){ alert(e.message); return; }
-  if(!devs.length){ alert("No timers configured."); return; }
-  const idx=curDevice!=null?parseInt(curDevice):0;
-  const d=devs[idx]; if(!d){ alert("No timer selected."); return; }
-  if(!confirm(`Remove "${d.name}"?\n\nThis only removes it from this app. The timer keeps its key. `
-    +`If it's a self-key timer, its key stays saved in secrets/ — back it up first if you might re-add it.`)) return;
-  try{
-    const r=await api("DELETE",`/api/devices/${idx}`);
-    log(`removed ${r.removed}`,"warn");
-    curDevice=null;
-    const nd=await loadDevices();
-    curDevice=nd.length?"0":null; if(curDevice!==null)$("#device").value=curDevice;
-    $("#log").innerHTML=""; if(nd.length) await loadDevice(); else buildValves(0);
-  }catch(e){ alert("Remove failed: "+e.message); }
+function removeCurrent(){
+  const d=devices[curIndex]; if(!d){ banner("No timer selected.","err"); return; }
+  confirmBanner(`Remove "${d.name}"? It stays on the timer with its key; this only removes it from this app.`, async ()=>{
+    try{
+      const r=await api("DELETE",`/api/devices/${d.index}`);
+      curIndex=null; $("#log").innerHTML="";
+      await renderApp();
+      banner(`Removed ${r.removed}.`,"ok");
+    }catch(e){ banner("Remove failed: "+e.message,"err"); }
+  });
 }
 
-async function init(){
-  try{
-    const devs=await loadDevices();
-    curDevice=devs.length?String(devs[0].index):null;
-    if(curDevice!==null)$("#device").value=curDevice;
-    if(!devs.length){log("no timers configured yet — click “＋ Add timer” to register one.","warn");
-      buildValves(4); return;}
-  }catch(e){log("device list failed: "+e.message,"warn");}   // fall back to server default
-  await loadDevice();
-}
+async function init(){ await renderApp(); }
 init();
 </script>
 </body>
