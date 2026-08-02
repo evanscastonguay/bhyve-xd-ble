@@ -1315,35 +1315,92 @@ def test_onboard_flow_multiple_devices_shows_picker(tmp_path, monkeypatch):
     assert KEY_A not in json.dumps(events) and KEY_B not in json.dumps(events)  # no key leaks
 
 
-def test_onboard_flow_account_mode_uses_injected_key(tmp_path, monkeypatch):
-    """P3: account mode provisions with the server-injected key (no cloud_fetch, no
-    login/pick inside the flow) — the clean 'authenticate elsewhere, provision here' seam."""
+def test_onboard_flow_account_with_mac_adopts_not_provisions(tmp_path, monkeypatch):
+    """PROVEN FIX: a timer already on the Orbit account (has a MAC) is already keyed, so
+    account 'add' must ADOPT it (catch_device: connect + read + save, NO reset/key-write),
+    never provision. Backed by live Experiment C (catch_device read status with the account
+    key and no reset)."""
     import json
     import onboarding as O
     p = tmp_path / "config.json"
-    ACC_KEY = "cc" * 16
-    captured = {}
+    ACC = "cc" * 16
+    called = {"adopt": 0, "prov": 0}
 
-    async def cap_provision(key, *, want_mac=None, **kw):
-        captured["key"], captured["mac"] = key, want_mac
+    async def rec_catch(key, *, want_mac=None, **kw):
+        called["adopt"] += 1
+        assert key == ACC and want_mac == "AA:BB:CC:DD:EE:01"
         st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
-        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+        return "UUID-ADOPT", "AA:BB:CC:DD:EE:01", st
+
+    async def rec_prov(key, *, want_mac=None, **kw):
+        called["prov"] += 1
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID", "AA:BB:CC:DD:EE:01", st
 
     def no_cloud(*a, **k):
         raise AssertionError("account mode must not call cloud_fetch")
 
-    monkeypatch.setattr(O, "provision_device", cap_provision)
+    monkeypatch.setattr(O, "catch_device", rec_catch)
+    monkeypatch.setattr(O, "provision_device", rec_prov)
     monkeypatch.setattr(O, "cloud_fetch", no_cloud)
     gate = O.OnboardGate()
-    params = {"mode": "account", "key": ACC_KEY, "name": "Smart Hose Tap Timer",
+    params = {"mode": "account", "key": ACC, "name": "Smart Hose Tap Timer",
               "device_mac": "AA:BB:CC:DD:EE:01", "stations": 4, "path": str(p)}
-    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_reset": None}))
-    assert captured["key"] == ACC_KEY and captured["mac"] == "AA:BB:CC:DD:EE:01"
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_wake": None}))
+    assert called["adopt"] == 1 and called["prov"] == 0          # ADOPT, not provision
+    assert any(e["id"] == "await_wake" for e in events)          # "wake", not...
+    assert not any(e["id"] == "await_reset" for e in events)     # ...factory reset
     saved = json.loads(p.read_text())["devices"][0]
-    assert saved["key_source"] == "orbit" and saved["network_key"] == ACC_KEY
-    assert saved["name"] == "Smart Hose Tap Timer"
+    assert saved["key_source"] == "orbit" and saved["network_key"] == ACC
+    assert saved["address"] == "UUID-ADOPT" and saved["name"] == "Smart Hose Tap Timer"
     assert events[-1]["id"] == "save"
-    assert ACC_KEY not in json.dumps(events)             # key never in an event
+    assert ACC not in json.dumps(events)
+
+
+def test_onboard_flow_account_without_mac_provisions_fresh(tmp_path, monkeypatch):
+    """An account 'timer that's not listed' (no MAC) is a FRESH unit -> provision (key-write),
+    not adopt."""
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    ACC = "dd" * 16
+    called = {"adopt": 0, "prov": 0}
+
+    async def rec_catch(key, *, want_mac=None, **kw):
+        called["adopt"] += 1
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID", "AA:BB:CC:DD:EE:01", st
+
+    async def rec_prov(key, *, want_mac=None, **kw):
+        called["prov"] += 1
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-PROV", "AA:BB:CC:DD:EE:01", st
+
+    monkeypatch.setattr(O, "catch_device", rec_catch)
+    monkeypatch.setattr(O, "provision_device", rec_prov)
+    gate = O.OnboardGate()
+    params = {"mode": "account", "key": ACC, "stations": 4, "path": str(p)}   # no device_mac
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_reset": None}))
+    assert called["prov"] == 1 and called["adopt"] == 0          # PROVISION, not adopt
+    assert any(e["id"] == "await_reset" for e in events)
+    assert json.loads(p.read_text())["devices"][0]["network_key"] == ACC
+
+
+def test_onboard_flow_adopt_failure_reports_and_saves_nothing(tmp_path, monkeypatch):
+    import onboarding as O
+    p = tmp_path / "config.json"
+
+    async def boom(key, *, want_mac=None, **kw):
+        raise O.ResolveError("could not catch the timer — phone Bluetooth OFF?")
+
+    monkeypatch.setattr(O, "catch_device", boom)
+    gate = O.OnboardGate()
+    params = {"mode": "account", "key": "ee" * 16, "device_mac": "AA:BB:CC:DD:EE:01",
+              "stations": 4, "path": str(p)}
+    events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_wake": None}))
+    assert events[-1]["id"] == "adopt" and events[-1]["state"] == "failed"
+    assert not any(e["id"] == "save" for e in events)
+    assert not p.exists()                                        # nothing written on failure             # key never in an event
 
 
 def test_onboard_flow_account_mode_missing_key_fails(tmp_path, monkeypatch):

@@ -670,13 +670,53 @@ async def onboard_flow(params, gate):
                         "Using a new self-generated key — the Orbit app won't control this timer; "
                         "your key is saved to secrets/.", state="done", verified=True)
 
-    async for ev in _provision_and_save(key, key_source, want_mac, name, stations, path, gate):
-        yield ev
+    # ADOPT vs PROVISION (proven by experiment): a timer already on your Orbit account is
+    # already keyed -> just connect with the key and register it (catch_device, read-only,
+    # no reset). Only a genuinely fresh timer (standalone/self, or an account "timer not
+    # listed" with no MAC) needs provisioning (reset + key-write).
+    if mode == "account" and want_mac:
+        async for ev in _adopt_and_save(key, key_source, want_mac, name, stations, path, gate):
+            yield ev
+    else:
+        async for ev in _provision_and_save(key, key_source, want_mac, name, stations, path, gate):
+            yield ev
+
+
+async def _adopt_and_save(key, key_source, want_mac, name, stations, path, gate):
+    """Adopt an ALREADY-KEYED timer (one on your Orbit account): connect with the account
+    key, read status, and register it — NO factory reset, NO key-write. Yields Step events;
+    NEVER yields the network key."""
+    yield _step("await_wake", "Wake the timer",
+                "Press any button on the timer so it wakes and advertises. Keep your phone's "
+                "Bluetooth OFF so it isn't holding the timer. Press Continue when ready.",
+                state="waiting_user")
+    await gate.wait()
+    yield _step("await_wake", "Wake the timer", "Searching for the timer…",
+                state="done", verified=True)
+
+    yield _step("adopt", "Connecting to your timer",
+                "Connecting over Bluetooth with your account key and reading its status — "
+                "please wait.", state="working", expected_wait_s=45)
+    try:
+        address, mac, st = await catch_device(key, want_mac=want_mac)
+    except ResolveError as e:
+        yield _step("adopt", "Connecting to your timer",
+                    f"Couldn't reach the timer: {e}", state="failed")
+        return
+
+    yield _step("verify", "Verifying control",
+                f"The timer answered — MAC {mac}, clock {st.clock_str}.", state="done", verified=True)
+    device = {"name": name or "B-Hyve XD", "address": address, "network_key": key,
+              "mac": mac, "stations": stations, "key_source": key_source}
+    write_config(path, device)
+    yield _step("save", "Saved and ready",
+                f"'{device['name']}' is set up ({key_source} key). You can control it now.",
+                state="done", verified=True)
 
 
 async def _provision_and_save(key, key_source, want_mac, name, stations, path, gate):
-    """The shared onboarding tail once a key is in hand (any mode): reset -> provision ->
-    verify -> save. Yields Step events; NEVER yields the network key."""
+    """The onboarding tail for a FRESH timer: reset -> provision (key-write) -> verify ->
+    save. Yields Step events; NEVER yields the network key."""
     yield _step("await_reset", "Reset the timer into pairing mode",
                 "Turn the dial to OFF, press and hold ~10s until the full display lights, then "
                 "release. Keep your phone's Bluetooth OFF. Press Continue when ready.",
