@@ -69,6 +69,8 @@ class FakeTimer:
         self.watering = False
         self.station = None
         self.seconds = None
+        self.programs = {}           # program_id -> stored (schedule persists on device)
+        self.active_mask = 0         # setActivePrograms bitmask
         self.primed = False          # device ignores actuation until it has been armed
         self.arm_count = 0
         # cipher session state (set at handshake)
@@ -126,7 +128,21 @@ class FakeTimer:
                 self._emit_status()
             elif fn == 94:                              # station config -> finalizes enrollment
                 self.persisted = True
-            # fields 18 (time string), 45 (battery), 20/22/120 (setup) are accepted + ignored
+            elif fn == 19:                              # setProgramSchedule -> define/delete
+                sub = {sfn: sv for sfn, _sw, sv in B.iter_fields(v)}
+                pid = sub.get(1)
+                if pid is not None:
+                    if 8 in sub:                        # has start times -> define; else -> delete
+                        self.programs[pid] = v
+                    else:
+                        self.programs.pop(pid, None)
+            elif fn == 20:                              # setActivePrograms -> enable bitmask
+                for sfn, _sw, sv in B.iter_fields(v):
+                    if sfn == 1:
+                        self.active_mask = sv
+            elif fn == 77:                              # getActivePrograms -> reply
+                self._emit_active()
+            # fields 18 (time string), 45 (battery), 22/120 (setup) are accepted + ignored
 
     def _actuate(self, timer_mode: bytes) -> None:
         if not self.primed:
@@ -161,10 +177,9 @@ class FakeTimer:
         body += B._fb(16, sub)
         return B._wrap(body)
 
-    def _emit_status(self) -> None:
+    def _send_notif(self, pt: bytes) -> None:
         if self._emit is None:
             return
-        pt = self._status_plaintext()
         ct = bytearray()
         cc = self.dev_rx
         for i in range(0, len(pt), 16):
@@ -173,6 +188,13 @@ class FakeTimer:
         self.dev_rx = cc
         trailer = (sum(pt) + FRAME_MAGIC + len(pt)) & 0xFFFF   # not validated by the reader
         self._emit(bytes([FRAME_MAGIC, len(ct)]) + bytes(ct) + struct.pack("<H", trailer))
+
+    def _emit_status(self) -> None:
+        self._send_notif(self._status_plaintext())
+
+    def _emit_active(self) -> None:
+        # reply carries ActivePrograms under field 20 (as the real device does)
+        self._send_notif(B._wrap(B._fb(20, B._fv(1, self.active_mask))))
 
 
 class FakeClient:
@@ -2145,6 +2167,129 @@ def test_program_from_rules_caps_at_six():
     m = SD.program_from_rules(rules)
     assert len(m["programs"]) == 6                 # A..F only
     assert any("6" in w for w in m["warnings"])    # warns the 7th is dropped
+
+
+# --- P4c-2: arm re-enables active programs; device push (fake-BLE integration) ---
+def test_api_push_and_clear_device_schedules(monkeypatch, tmp_path):
+    """End-to-end (fake BLE): POST push stores the saved rules on the device, verifies via
+    getActivePrograms, persists the mask; POST clear disables them."""
+    import json
+    import server
+    import schedule as S
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [{"name": "A", "address": "FAKE-ADDR", "mac": TEST_MAC,
+                                            "network_key": TEST_KEY, "stations": 4}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+    S.write_schedules(str(cfg), TEST_MAC,
+                      [{"valve": 1, "start": "06:00", "days": list(range(7)), "minutes": 5}])
+    t = FakeTimer(mac=TEST_MAC)
+    with one_device(t):
+        res = asyncio.run(server.push_schedules(0))
+        assert res["active_mask"] == 1 and res["verified"] is True
+        assert t.active_mask == 1 and set(t.programs) == {1}
+        assert asyncio.run(server.device_active(0))["device_active_mask"] == 1
+        assert json.loads(cfg.read_text())["devices"][0]["device_active_mask"] == 1
+        asyncio.run(server.clear_device_schedules(0))
+    assert t.active_mask == 0
+    assert json.loads(cfg.read_text())["devices"][0]["device_active_mask"] == 0
+
+
+def test_api_push_502_and_not_saved_when_unverified(monkeypatch, tmp_path):
+    """If the device doesn't confirm the read-back, push returns 502 and persists NOTHING."""
+    from fastapi import HTTPException
+    import json
+    import server
+    import schedule as S
+    import schedule_device as SD
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [{"name": "A", "address": "FAKE-ADDR", "mac": TEST_MAC,
+                                            "network_key": TEST_KEY, "stations": 4}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+    S.write_schedules(str(cfg), TEST_MAC,
+                      [{"valve": 1, "start": "06:00", "days": list(range(7)), "minutes": 5}])
+
+    async def unconfirmed(sess, **kw):     # simulate a failed/garbled read-back
+        return None
+    monkeypatch.setattr(SD, "read_active_mask", unconfirmed)
+    t = FakeTimer(mac=TEST_MAC)
+    with one_device(t):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(server.push_schedules(0))
+    assert exc.value.status_code == 502
+    assert "device_active_mask" not in json.loads(cfg.read_text())["devices"][0]  # not persisted
+
+
+def test_api_push_empty_rules_clears(monkeypatch, tmp_path):
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [{"name": "A", "address": "FAKE-ADDR", "mac": TEST_MAC,
+                                            "network_key": TEST_KEY, "stations": 4}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+    t = FakeTimer(mac=TEST_MAC)
+    with one_device(t):
+        res = asyncio.run(server.push_schedules(0))       # no rules stored
+    assert res["active_mask"] == 0 and res["verified"] is True and t.active_mask == 0
+
+
+def test_api_push_bad_rule_is_400_not_504(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    # a hand-edited config with a malformed rule (bypasses write-time validation)
+    cfg.write_text(json.dumps({"devices": [{"name": "A", "address": "FAKE-ADDR", "mac": TEST_MAC,
+                                            "network_key": TEST_KEY, "stations": 4,
+                                            "schedules": [{"valve": 1, "start": "BAD", "days": [0],
+                                                           "minutes": 5}]}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server.push_schedules(0))
+    assert exc.value.status_code == 400                    # data error, not a 504 BLE error
+
+
+def test_control_session_reenables_active_programs():
+    """SAFETY: arm() sends setActivePrograms{0} every connect. A control op on a device with
+    device_active_mask set must RE-ENABLE it, so controlling a valve never wipes a schedule."""
+    t = FakeTimer()
+    with one_device(t):
+        dev = BHyveXD("FAKE-ADDR", TEST_KEY, tz_offset_sec=0, stations=4, device_active_mask=5)
+        asyncio.run(dev.status())
+    assert t.active_mask == 5                     # SETUP_FIELD20 zeroed it; re-enable restored A+C
+
+
+def test_control_without_mask_does_not_reenable():
+    t = FakeTimer(); t.active_mask = 0
+    with one_device(t):
+        asyncio.run(BHyveXD("FAKE-ADDR", TEST_KEY, tz_offset_sec=0).status())  # mask defaults 0
+    assert t.active_mask == 0
+
+
+def test_encode_push_frames_orders_programs_then_active():
+    import schedule_device as SD
+    rules = [{"valve": 1, "start": "06:00", "days": list(range(7)), "minutes": 5, "enabled": True},
+             {"valve": 3, "start": "07:00", "days": list(range(7)), "minutes": 5, "enabled": True}]
+    info = SD.encode_push_frames(rules)
+    assert info["active_mask"] == 3 and len(info["frames"]) == 3      # 2 programs (A,B) + setActive
+    last = _field(_unwrap(info["frames"][-1]), 20)                    # final = setActivePrograms
+    assert _field(last, 1) == 3
+
+
+def test_push_program_to_device_persists_and_verifies():
+    import schedule_device as SD
+    t = FakeTimer()
+    rules = [{"valve": 1, "start": "06:00", "days": list(range(7)), "minutes": 5, "enabled": True},
+             {"valve": 3, "start": "07:00", "days": list(range(7)), "minutes": 5, "enabled": True}]
+    with one_device(t):
+        dev = BHyveXD("FAKE-ADDR", TEST_KEY, tz_offset_sec=0, stations=4)
+        res = asyncio.run(SD.push_program_to_device(dev, rules))
+    assert res["active_mask"] == 3 and res["verified"] is True
+    assert t.active_mask == 3 and set(t.programs) == {1, 2}           # programs A + B stored
+    assert dev.device_active_mask == 3                               # future control re-enables
 
 
 def test_resolve_linux_returns_mac():

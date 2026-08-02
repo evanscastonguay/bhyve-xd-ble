@@ -77,3 +77,14 @@ def write_schedules(path: str, mac: str, rules: list[dict]) -> dict:
     stations = int(dev.get("stations") or 4)
     dev["schedules"] = [validate_rule(r, stations) for r in rules]   # all-or-nothing
     return _atomic_write_config(path, config)
+
+
+def set_device_active_mask(path: str, mac: str, mask: int) -> dict:
+    """Persist the on-device active-program bitmask for a timer so control sessions re-enable
+    it (see BHyveXD.device_active_mask). Raises ScheduleError on unknown MAC."""
+    config = _load_config(path)
+    dev = _find_device(config.get("devices", []), mac)
+    if dev is None:
+        raise ScheduleError(f"no timer with MAC {mac} in config")
+    dev["device_active_mask"] = int(mask)
+    return _atomic_write_config(path, config)
