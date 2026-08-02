@@ -173,6 +173,14 @@ SETUP_FIELD22 = bytes.fromhex("aa775a0f0500b20100e1dc")
 SETUP_FIELD20 = bytes.fromhex("aa775a0f0700a201020800353e")
 SETUP_FIELD120 = bytes.fromhex("aa775a0f0700c207020a001266")
 
+# Provisioning setup — captured verbatim from the official app's FIRST-enrollment
+# connection (after the 6c76 key write; see SPIKE_provisioning.md). Sending these is what
+# PERSISTS the network key onto a factory-fresh device (a plain arm() does not). HT34
+# 4-station specific. field 10 = query, field 57 = config{1000,2}, field 94 = stations 0-3.
+PROV_GET = bytes.fromhex("aa775a0f04005200f3bb")
+PROV_CONFIG = bytes.fromhex("aa775a0f0a00ca030508e8071002b730")
+PROV_STATIONS = bytes.fromhex("aa775a0f1700f205120a100a0208000a0208010a0208020a0208037613")
+
 
 def host_tz_offset() -> int:
     """The host's current UTC offset in seconds (e.g. -14400 for EDT). Used to
@@ -413,6 +421,18 @@ class _Session:
         ts, st = msg_time_string(iso), msg_set_time(int(time.time()), self._dev.tz_offset_sec)
         for m in (ts, st, msg_get_status(), msg_get_battery(),
                   SETUP_FIELD22, SETUP_FIELD20, SETUP_FIELD120, ts, st):
+            await self._send(m)
+
+    async def provision_setup(self):
+        """The app's FIRST-enrollment setup sequence, sent right after the 6c76 key
+        write, that PERSISTS the key onto a factory-fresh device (captured in
+        SPIKE_provisioning.md). Differs from arm() — includes the station-config (field
+        94) that finalizes enrollment. Used by onboarding.provision_device."""
+        iso = self._iso_now()
+        ts = msg_time_string(iso)
+        st = msg_set_time(int(time.time()), self._dev.tz_offset_sec)
+        for m in (ts, st, SETUP_FIELD22, PROV_GET, msg_get_battery(),
+                  PROV_CONFIG, msg_stop(), PROV_STATIONS):
             await self._send(m)
 
     async def set_clock(self, dt: datetime):

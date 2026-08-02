@@ -113,12 +113,15 @@ default. Multiple timers on one account share one account key.
 - Backup checkpoint tag: **`onboarding-complete-2026-08-01`** (pushed).
 
 ## 10. Known gaps / possible future work
-- **App-free factory-reset onboarding** — **built AND live-verified (2026-08-01)**:
-  `onboarding.provision_device` / `cli.py provision` took a factory-reset, keyless device
-  and enrolled it — wrote `0x0100`‖key to char `6c76`, then confirmed by reading the
-  device's MAC + status back — **with the Orbit app never opened**. Local control needs
-  only the on-device key write (no cloud registration). Mechanism: `SPIKE_provisioning.md`.
-  This closes the last app dependency; the full lifecycle is now app-free.
+- **App-free factory-reset onboarding** — **built; persistence fix in, live-unconfirmed.**
+  `onboarding.provision_device` / `cli.py provision` writes `0x0100`‖key to char `6c76`,
+  then replays the app's enrollment setup — including the **station-config (field 94)**
+  that **persists** the key — then verifies by read-back. History/correction: the first
+  live attempt (2026-08-01) decoded *in-session* but **did not persist** across a reboot
+  (a plain `arm()` isn't enough); decrypting a full app-enrollment capture revealed the
+  finalize sequence, now replayed by `provision_setup()`. **Live gate pending**: needs
+  one more factory reset to confirm the key survives a power-cycle. Mechanism +
+  correction: `SPIKE_provisioning.md`.
 - **Catch-once-and-hold resident server** (`PLAN_catch_and_hold.md`) — deferred; the
   stable UUID made it unnecessary for the current units.
 - **Linux/BlueZ headless host** — addresses by MAC (no rotating-UUID problem); the
