@@ -50,32 +50,38 @@
       <label id="devpick" style="font-size:13px;color:var(--mut);display:none">Timer:
         <select id="device" onchange="onDeviceChange()"></select>
       </label>
-      <button class="ghost" style="margin-left:auto" onclick="toggleOnboard()">＋ Add timer</button>
+      <span style="margin-left:auto;display:flex;gap:8px">
+        <button class="ghost" onclick="toggleOnboard()">＋ Add timer</button>
+        <button class="ghost" onclick="removeCurrent()" title="Remove the selected timer">🗑 Remove</button>
+      </span>
     </div>
 
     <div id="onboard" style="display:none;margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
-      <div style="font-weight:600;margin-bottom:6px">Register a new timer</div>
-      <div class="hint" style="margin-top:0;margin-bottom:10px">
-        <b>Before you start:</b> turn your <b>phone's Bluetooth OFF</b> so it isn't holding
-        the timer, and keep the timer close to this computer. Then click Find &amp; Register.</div>
-      <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:460px">
-        <label for="ob_name">Name</label>
-        <input id="ob_name" type="text" placeholder="e.g. Back Yard" style="width:100%">
-        <label for="ob_mac">MAC <span class="min">(optional)</span></label>
-        <input id="ob_mac" type="text" placeholder="44:67:55:… (only if several nearby)" style="width:100%">
-        <div id="ob_cloudfields" style="display:contents">
-          <label for="ob_email">Orbit email</label>
-          <input id="ob_email" type="email" placeholder="first timer only — fetches the key" style="width:100%">
-          <label for="ob_pw">Orbit password</label>
-          <input id="ob_pw" type="password" placeholder="never stored" style="width:100%">
+      <div style="font-weight:600;margin-bottom:8px">Add a timer</div>
+
+      <div id="ob_mode">
+        <div class="hint" style="margin-top:0">How should we set it up?</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0">
+          <button class="bon" onclick="wizStart('orbit')">Use my Orbit account</button>
+          <button class="ghost" onclick="wizStart('self')">Standalone (my own key)</button>
         </div>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:460px">
+          <label for="ob_name">Name</label>
+          <input id="ob_name" type="text" placeholder="e.g. Back Yard" style="width:100%">
+          <label for="ob_mac">MAC <span class="min">(optional)</span></label>
+          <input id="ob_mac" type="text" placeholder="only if several timers are nearby" style="width:100%">
+          <label for="ob_email">Orbit email</label>
+          <input id="ob_email" type="email" placeholder="for “Use my Orbit account”" style="width:100%">
+          <label for="ob_pw">Orbit password</label>
+          <input id="ob_pw" type="password" placeholder="used once, never stored" style="width:100%">
+        </div>
+        <div class="hint">“Use my Orbit account” shares the app's key so the Orbit app keeps
+          working. “Standalone” makes its own key — no Orbit account needed, but the app
+          can't control it (we save the key for you).</div>
+        <div style="margin-top:10px"><button class="ghost" onclick="toggleOnboard()">Cancel</button></div>
       </div>
-      <div id="ob_keyhint" class="hint" style="display:none">✓ Using the account key already saved — no login needed.</div>
-      <div style="margin-top:12px;display:flex;gap:8px">
-        <button class="bon" onclick="doRegister()">Find &amp; Register</button>
-        <button class="ghost" onclick="toggleOnboard()">Cancel</button>
-      </div>
-      <div id="ob_msg" class="hint" style="margin-top:10px"></div>
+
+      <div id="ob_steps" style="display:none"></div>
     </div>
   </div>
 
@@ -189,48 +195,99 @@ async function loadDevices(){
   return devs;
 }
 
-// ---- onboarding wizard ----
-async function toggleOnboard(){
+// ---- onboarding wizard (SSE step tracker) ----
+let es=null, steps={}, order=[];
+const val=(id)=>($("#"+id).value||"").trim();
+
+function toggleOnboard(){
   const el=$("#onboard"); const show=el.style.display==="none";
-  el.style.display=show?"block":"none"; $("#ob_msg").textContent="";
-  if(show){
-    try{const s=await api("GET","/api/onboard/state");
-      // With a saved account key, adding another timer needs no cloud login.
-      $("#ob_cloudfields").style.display=s.has_key?"none":"contents";
-      $("#ob_keyhint").style.display=s.has_key?"block":"none";
-    }catch(e){/* leave login fields visible on failure */}
-  }
+  el.style.display=show?"block":"none";
+  $("#ob_mode").style.display="block"; $("#ob_steps").style.display="none"; $("#ob_steps").innerHTML="";
+  if(es){es.close();es=null;}
 }
 
-async function doRegister(){
-  if(busy)return;
-  const body={
-    name:$("#ob_name").value.trim()||null,
-    device_mac:$("#ob_mac").value.trim()||null,
-    email:$("#ob_email").value.trim()||null,
-    password:$("#ob_pw").value||null,
-  };
-  const msg=$("#ob_msg"); msg.className="hint"; msg.textContent="";
-  setBusy(true,"searching for the timer… (turn phone Bluetooth OFF)");
-  log("→ register: searching (phone Bluetooth must be OFF)…");
-  try{
-    const r=await api("POST","/api/onboard/register",body);
-    const d=r.registered;
-    msg.innerHTML=`<span class="ok">✓ registered <b>${d.name}</b> — ${d.mac}</span>`;
-    log(`✓ registered ${d.name} (${d.mac}) at ${d.address}`,"ok");
-    const devs=await loadDevices();                       // refresh + select the new one
-    const added=devs.find(x=>x.name===d.name);
-    if(added){curDevice=String(added.index); $("#device").value=curDevice;}
-    $("#onboard").style.display="none";
-    $("#ob_pw").value="";                                 // don't leave the password in the field
-    $("#log").innerHTML=""; await loadDevice();
-  }catch(e){
-    msg.innerHTML=`<span class="err">✗ ${e.message}</span>`;
-    log("✗ register: "+e.message,"err");
-    if(/bluetooth/i.test(e.message))
-      msg.innerHTML+=`<br><span class="warn">Tip: make sure the phone's Bluetooth is OFF, then retry.</span>`;
+async function wizStart(mode){
+  const body={mode, name:val("ob_name")||null, device_mac:val("ob_mac")||null,
+              email:val("ob_email")||null, password:$("#ob_pw").value||null};
+  try{ await api("POST","/api/onboard/start",body); }
+  catch(e){ alert("Couldn't start: "+e.message); return; }
+  $("#ob_pw").value="";                          // don't keep the password in the field
+  $("#ob_mode").style.display="none"; $("#ob_steps").style.display="block";
+  steps={}; order=[]; $("#ob_steps").innerHTML="";
+  es=new EventSource("/api/onboard/stream");
+  es.onmessage=(e)=>{ try{ onStep(JSON.parse(e.data)); }catch(_){} };
+}
+
+function onStep(ev){
+  if(ev.id==="idle")return;
+  if(!(ev.id in steps))order.push(ev.id);
+  if(ev.state==="working" && ev.expected_wait_s && !(steps[ev.id]&&steps[ev.id]._deadline))
+    ev._deadline=Date.now()+ev.expected_wait_s*1000;
+  else if(steps[ev.id]&&steps[ev.id]._deadline&&ev.state==="working") ev._deadline=steps[ev.id]._deadline;
+  steps[ev.id]=ev;
+  renderSteps();
+  if(ev.id==="save"&&ev.state==="done") wizDone();
+}
+
+function renderSteps(){
+  let h="";
+  for(const id of order){
+    const s=steps[id];
+    const icon=s.state==="done"?"✓":s.state==="failed"?"✗":s.state==="waiting_user"?"→":"⟳";
+    const cls=s.state==="done"?"ok":s.state==="failed"?"err":s.state==="waiting_user"?"warn":"";
+    let wait="";
+    if(s.state==="working"&&s._deadline){
+      const left=Math.max(0,Math.round((s._deadline-Date.now())/1000));
+      wait=left>0?` <span class="min">~${left}s</span>`:` <span class="min">almost there…</span>`;
+    }
+    h+=`<div style="padding:8px 0;border-top:1px solid var(--line)">
+          <div><span class="${cls}">${icon}</span> <b>${s.title}</b>${wait}</div>
+          <div class="hint" style="margin-top:2px">${s.instruction||""}</div>`;
+    if(s.state==="waiting_user"){
+      if(s.id==="fallback_choice"){
+        h+=`<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+              <button class="bon" onclick="wizChoose('orbit_app_first')">Set up in the Orbit app first</button>
+              <button class="ghost" onclick="wizChoose('self_key')">Standalone (my own key)</button></div>`;
+      }else{
+        h+=`<div style="margin-top:8px"><button class="bon" onclick="wizContinue()">Continue</button></div>`;
+      }
+    }
+    h+=`</div>`;
   }
-  setBusy(false);
+  $("#ob_steps").innerHTML=h;
+}
+
+function _ack(){ for(const id of order) if(steps[id].state==="waiting_user") steps[id]={...steps[id],state:"working"}; renderSteps(); }
+function wizContinue(){ _ack(); api("POST","/api/onboard/continue",{}).catch(e=>alert(e.message)); }
+function wizChoose(c){ _ack(); api("POST","/api/onboard/continue",{choice:c}).catch(e=>alert(e.message)); }
+
+async function wizDone(){
+  if(es){es.close();es=null;}
+  log("✓ onboarding complete","ok");
+  const devs=await loadDevices();
+  if(devs.length){curDevice=String(devs[devs.length-1].index); $("#device").value=curDevice;}
+  $("#onboard").style.display="none"; $("#ob_mode").style.display="block"; $("#ob_steps").style.display="none";
+  $("#log").innerHTML=""; if(devs.length) await loadDevice();
+}
+
+// live countdown for working steps
+setInterval(()=>{ if($("#ob_steps").style.display!=="none" && order.some(id=>steps[id].state==="working")) renderSteps(); },1000);
+
+async function removeCurrent(){
+  let devs; try{ devs=await api("GET","/api/devices"); }catch(e){ alert(e.message); return; }
+  if(!devs.length){ alert("No timers configured."); return; }
+  const idx=curDevice!=null?parseInt(curDevice):0;
+  const d=devs[idx]; if(!d){ alert("No timer selected."); return; }
+  if(!confirm(`Remove "${d.name}"?\n\nThis only removes it from this app. The timer keeps its key. `
+    +`If it's a self-key timer, its key stays saved in secrets/ — back it up first if you might re-add it.`)) return;
+  try{
+    const r=await api("DELETE",`/api/devices/${idx}`);
+    log(`removed ${r.removed}`,"warn");
+    curDevice=null;
+    const nd=await loadDevices();
+    curDevice=nd.length?"0":null; if(curDevice!==null)$("#device").value=curDevice;
+    $("#log").innerHTML=""; if(nd.length) await loadDevice(); else buildValves(0);
+  }catch(e){ alert("Remove failed: "+e.message); }
 }
 
 async function init(){
