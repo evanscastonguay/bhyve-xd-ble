@@ -87,9 +87,13 @@ So the box clones only product-relevant files. Verified by usage analysis (impor
   (`setsid … </dev/null &` + pidfile).
 - **Proves:** the Linux box can actually control THIS timer over BLE.
 
-### P3 — Control parity (hose off)
+### P3 — Control parity (hose off) ✅ DONE 2026-08-02
 - Start/stop a valve from the box (`cli.py start 1 60`, `stop`) → confirmed watering/idle.
 - **Proves:** full manual control works from Linux, same as the Mac.
+- **Result:** `start 1 60` → read-back `watering=True, run_state=4, seconds_remaining=60` (zone 1
+  ON); `stop` → `watering=False, run_state=0` (idle), re-confirmed by a follow-up status. Valve
+  physically actuated ON then OFF from the box; both writes self-confirmed. `run_state`: 4=watering,
+  0=idle on this unit (`is_watering` parsed correctly). Full control parity with the Mac.
 
 ### P4 — systemd service
 - Unit `bhyve.service`: `ExecStart=…/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000`,
