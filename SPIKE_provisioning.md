@@ -3,14 +3,18 @@
 _Investigation only. No device reset, no implementation, until the B0 decision below.
 Written 2026-08-01 from first principles + what this project already established._
 
-> **BUILT; PERSISTENCE FIX IN; LIVE-UNCONFIRMED (2026-08-01).** Correction to an earlier
-> over-claim: `provision_device`'s first live run decoded *in-session* but the key **did
-> not persist** across a reboot — a plain `arm()` after the `6c76` write is not enough.
-> A second capture (full app enrollment) was decrypted with the account key; the app
-> sends extra setup messages the finalize the enrollment — notably a **station-config
-> (protobuf field 94)** plus fields 10/57 and a stop (field 14). `provision_setup()` now
-> replays that captured sequence. **Still needs one factory reset to confirm persistence
-> on hardware.**
+> **PROVEN durable (2026-08-02).** `provision_proof.py` ran the causal chain on one
+> device: **negative control confirmed KEYLESS** (our key did not decode) → provisioned
+> **app-free** (Orbit app never opened) → **survived 3 power-cycles**, each re-verified in
+> a **fresh process** (status decoded + zone start/stop). The finalize is a **station-
+> config (protobuf field 94)** plus fields 10/57 and a stop (14); the device drops the BLE
+> link after keying, so `provision_device` is **two-phase** (write key → reconnect →
+> finalize + verify). Caveats: one device / macOS; HT34 4-station finalize; local-control
+> only (no cloud registration).
+>
+> _History: an earlier one-connection attempt (2026-08-01) decoded in-session but did NOT
+> persist (a plain `arm()` after the key write is insufficient) — the corrected, two-phase
+> finalize is what made it durable._
 >
 > **RESOLVED 2026-08-01 — B1 capture done → B2 analysed → B3 = GO (feasible, simple).**
 > A live HCI capture (PacketLogger) of the official app enrolling a factory-reset device
