@@ -462,6 +462,29 @@ def test_api_lists_devices(monkeypatch, tmp_path):
     ]
 
 
+def test_api_version_reads_version_file(monkeypatch, tmp_path):
+    """GET /api/version reports git_sha + released_at from the deploy-written VERSION file."""
+    import server
+    (tmp_path / "VERSION").write_text("abc1234\n2026-08-02T22:00:00Z\n")
+    monkeypatch.setattr(server, "HERE", str(tmp_path))
+    got = asyncio.run(server.version())
+    assert got == {
+        "version": server.app.version,
+        "git_sha": "abc1234",
+        "released_at": "2026-08-02T22:00:00Z",
+    }
+
+
+def test_api_version_falls_back_without_file(monkeypatch, tmp_path):
+    """With no VERSION file (and not a git repo), version() degrades to git_sha='dev'."""
+    import server
+    monkeypatch.setattr(server, "HERE", str(tmp_path))   # tmp_path is outside any git repo
+    got = asyncio.run(server.version())
+    assert got["version"] == server.app.version
+    assert got["git_sha"] == "dev"
+    assert got["released_at"] is None
+
+
 def test_api_status_selects_device(monkeypatch):
     """A ?device= selection is forwarded to from_config for the BLE call."""
     import server
