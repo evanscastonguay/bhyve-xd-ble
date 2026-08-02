@@ -153,6 +153,20 @@ async def account_get():
             "has_saved_key": saved is not None}
 
 
+@app.get("/api/account/timers")
+async def account_timers():
+    """The cached account timer list (name/mac/stations, **never the key**), each flagged
+    `added`. Empty with signed_in=false if there's no live session (e.g. after a restart) —
+    the UI then offers a fresh sign-in or a loginless add with the saved key."""
+    sess = _account_session
+    if not sess:
+        return {"signed_in": False, "timers": []}
+    have = _config_macs()
+    return {"signed_in": True,
+            "timers": [{**t, "added": (t.get("mac") or "").upper() in have}
+                       for t in sess.get("devices", [])]}
+
+
 @app.post("/api/account/forget")
 async def account_forget():
     """Forget the account: clear the in-memory session AND remove the persisted account

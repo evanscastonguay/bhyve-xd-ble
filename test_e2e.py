@@ -602,6 +602,31 @@ def test_account_login_bad_creds_401(monkeypatch, tmp_path):
     assert O.read_account(str(cfg)) is None                       # nothing persisted on failure
 
 
+def test_account_timers_lists_session_with_added_flags(monkeypatch, tmp_path):
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"devices":[{"mac":"44:67:55:D8:78:00"}]}')
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_account_session",
+                        {"email": "me@x.com", "key": TEST_KEY, "devices": [
+                            {"name": "A", "mac": "44:67:55:D8:78:00", "stations": 4},
+                            {"name": "B", "mac": "44:67:55:D8:71:B0", "stations": 4}]}, raising=False)
+    res = asyncio.run(server.account_timers())
+    assert res["signed_in"] is True
+    added = {t["mac"]: t["added"] for t in res["timers"]}
+    assert added["44:67:55:D8:78:00"] is True and added["44:67:55:D8:71:B0"] is False
+    assert TEST_KEY not in json.dumps(res)               # key never in the body
+
+
+def test_account_timers_empty_when_not_signed_in(monkeypatch, tmp_path):
+    import server
+    monkeypatch.setattr(server, "CONFIG", str(tmp_path / "c.json"))
+    monkeypatch.setattr(server, "_account_session", None, raising=False)
+    res = asyncio.run(server.account_timers())
+    assert res["signed_in"] is False and res["timers"] == []
+
+
 def test_account_get_reflects_state(monkeypatch, tmp_path):
     import server
     import onboarding as O
