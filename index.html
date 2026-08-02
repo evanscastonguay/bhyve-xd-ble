@@ -59,44 +59,52 @@
     <div id="onboard" style="display:none;margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
       <div style="font-weight:600;margin-bottom:8px">Add a timer</div>
 
-      <!-- Screen 1: choose a path -->
+      <!-- Screen 1: choose a path (rendered from account state) -->
       <div id="ob_choose">
-        <div class="hint" style="margin-top:0">How do you want to set it up?</div>
-        <div id="ob_reuse_row" style="display:none;margin:10px 0 0">
-          <button class="bon" style="width:100%;text-align:left" onclick="wizGo('reuse')">
-            ＋ Add another timer <span class="min">— reuses your saved Orbit key, no login</span></button>
+        <div class="hint" id="ob_choose_hint" style="margin-top:0">How do you want to set it up?</div>
+        <div id="ob_addrow" style="display:none;margin:10px 0 0">
+          <button class="bon" style="width:100%;text-align:left" onclick="wizAddToAccount()">
+            ＋ Add a timer to <b id="ob_acct_email"></b> <span class="min">— no login needed</span></button>
         </div>
         <div style="display:grid;gap:8px;margin:10px 0">
-          <button class="bon" style="text-align:left" onclick="wizScreen('orbit')">
+          <button class="bon" id="ob_btn_orbit" style="text-align:left" onclick="wizScreen('orbit')">
             Use my Orbit account <span class="min">— the Orbit app keeps working too</span></button>
           <button class="ghost" style="text-align:left" onclick="wizScreen('self')">
             Standalone <span class="min">— your own key, no Orbit account (the app can't control it)</span></button>
         </div>
+        <div id="ob_switch" style="display:none;margin-top:2px">
+          <button class="ghost" onclick="wizForget()">Use a different Orbit account</button></div>
         <div style="margin-top:6px"><button class="ghost" onclick="toggleOnboard()">Cancel</button></div>
       </div>
 
-      <!-- Screen 2a: Orbit login -->
+      <!-- Screen 2: Orbit login (credentials only — name/MAC come from the account) -->
       <div id="ob_orbit" style="display:none">
         <div style="font-weight:600;margin-bottom:6px">Sign in to Orbit</div>
-        <div class="hint" style="margin-top:0;margin-bottom:10px">Used once to fetch your account key
-          so the Orbit app and this page share it. Your password is never stored.</div>
+        <div class="hint" style="margin-top:0;margin-bottom:10px">Used once for this account to fetch its
+          key so the Orbit app and this page share it. Your password is never stored.</div>
         <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:420px">
           <label for="ob_email">Email</label>
           <input id="ob_email" type="email" oninput="orbitValidate()" placeholder="you@example.com" style="width:100%">
           <label for="ob_pw">Password</label>
           <input id="ob_pw" type="password" oninput="orbitValidate()" style="width:100%">
-          <label for="ob_name">Timer name</label>
-          <input id="ob_name" type="text" placeholder="optional, e.g. Back Yard" style="width:100%">
-          <label for="ob_mac">MAC <span class="min">(adv.)</span></label>
-          <input id="ob_mac" type="text" placeholder="only if several timers are nearby" style="width:100%">
         </div>
+        <div id="ob_orbit_err" class="err" style="display:none;margin-top:8px;font-size:13px"></div>
         <div style="margin-top:12px;display:flex;gap:8px">
-          <button class="bon" id="ob_signin" onclick="wizGo('orbit')" disabled>Sign in &amp; find my timer</button>
+          <button class="bon" id="ob_signin" onclick="wizLogin()" disabled>Sign in &amp; find my timers</button>
           <button class="ghost" onclick="wizScreen('choose')">Back</button>
         </div>
       </div>
 
-      <!-- Screen 2b: Standalone -->
+      <!-- Screen 3: pick which account timer to add -->
+      <div id="ob_pick" style="display:none">
+        <div style="font-weight:600;margin-bottom:6px" id="ob_pick_title">Choose a timer to add</div>
+        <div class="hint" id="ob_pick_hint" style="margin-top:0;margin-bottom:10px"></div>
+        <div id="ob_pick_list" style="display:grid;gap:8px"></div>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button class="ghost" onclick="wizScreen('choose')">Back</button></div>
+      </div>
+
+      <!-- Screen 4: standalone (own key) — name only -->
       <div id="ob_self" style="display:none">
         <div style="font-weight:600;margin-bottom:6px">Standalone (your own key)</div>
         <div class="hint" style="margin-top:0;margin-bottom:10px">We generate a key just for this timer —
@@ -106,7 +114,7 @@
           <input id="ob_name_self" type="text" placeholder="optional, e.g. Back Yard" style="width:100%">
         </div>
         <div style="margin-top:12px;display:flex;gap:8px">
-          <button class="bon" onclick="wizGo('self')">Set up standalone</button>
+          <button class="bon" onclick="wizSelfStart()">Set up standalone</button>
           <button class="ghost" onclick="wizScreen('choose')">Back</button>
         </div>
       </div>
@@ -230,14 +238,28 @@ let es=null, steps={}, order=[];
 const val=(id)=>($("#"+id).value||"").trim();
 const esc=(s)=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 
+const OB_SCREENS=["choose","orbit","pick","self"];
 function wizScreen(name){
-  for(const s of ["choose","orbit","self"]) $("#ob_"+s).style.display=(s===name)?"block":"none";
+  for(const s of OB_SCREENS) $("#ob_"+s).style.display=(s===name)?"block":"none";
   $("#ob_steps").style.display="none";
-  if(name==="orbit") orbitValidate();
+  if(name==="orbit"){ $("#ob_orbit_err").style.display="none"; orbitValidate(); }
 }
 
 function orbitValidate(){   // can't submit an empty login
   $("#ob_signin").disabled = !(val("ob_email") && $("#ob_pw").value);
+}
+
+// Render the choose screen from account state: signed-in / saved-key -> "add to <email>".
+function renderChoose(acct){
+  const known = acct && (acct.signed_in || acct.has_saved_key);
+  $("#ob_acct_email").textContent = (acct && acct.email) || "your account";
+  $("#ob_addrow").style.display   = known ? "block" : "none";
+  $("#ob_switch").style.display   = known ? "block" : "none";
+  $("#ob_btn_orbit").style.display= known ? "none"  : "block";   // saved -> re-login via "different account"
+  $("#ob_choose_hint").textContent = known
+    ? "You're set up with Orbit — add another timer, or:"
+    : "How do you want to set it up?";
+  wizScreen("choose");
 }
 
 async function toggleOnboard(){
@@ -245,25 +267,63 @@ async function toggleOnboard(){
   el.style.display=show?"block":"none";
   if(es){es.close();es=null;}
   if(show){
-    wizScreen("choose");
-    try{ const s=await api("GET","/api/onboard/state"); $("#ob_reuse_row").style.display=s.has_key?"block":"none"; }
-    catch(_){ $("#ob_reuse_row").style.display="none"; }
+    try{ renderChoose(await api("GET","/api/account")); }
+    catch(_){ renderChoose(null); }
   }
 }
 
-async function wizGo(mode){
-  let body={mode};
-  if(mode==="orbit") body={mode, email:val("ob_email")||null, password:$("#ob_pw").value||null,
-                           name:val("ob_name")||null, device_mac:val("ob_mac")||null};
-  else if(mode==="self") body={mode, name:val("ob_name_self")||null};
+// --- Orbit account path -----------------------------------------------------
+async function wizLogin(){
+  $("#ob_signin").disabled=true; $("#ob_orbit_err").style.display="none";
+  let res;
+  try{ res=await api("POST","/api/account/login",{email:val("ob_email"), password:$("#ob_pw").value}); }
+  catch(e){ $("#ob_orbit_err").textContent="Sign-in failed: "+e.message+" — check your email/password (multi-factor accounts aren't supported).";
+            $("#ob_orbit_err").style.display="block"; orbitValidate(); return; }
+  finally{ $("#ob_pw").value=""; }                 // never keep the password around
+  showPick(res.timers||[]);
+}
+
+// From the choose screen's "Add a timer to <email>" (already signed in / saved key).
+async function wizAddToAccount(){
+  let t={signed_in:false, timers:[]};
+  try{ t=await api("GET","/api/account/timers"); }catch(_){}
+  if(t.signed_in && (t.timers||[]).length) showPick(t.timers);
+  else wizAccountProvision(null);                  // no live list -> loginless add with saved key
+}
+
+function showPick(timers){
+  $("#ob_pick_hint").textContent = timers.length>1
+    ? "Your account has more than one timer. Pick the one to add."
+    : "Confirm the timer to add.";
+  const rows = timers.map(t=>{
+    const added=t.added;
+    const label=esc(t.name||t.mac||"Timer")+(added?' <span class="min">— already added</span>':"");
+    const mac=String(t.mac||"").replace(/'/g,"\\'");
+    return `<button class="${added?'ghost':'bon'}" style="text-align:left"${added?' disabled':''}
+              onclick="wizAccountProvision('${mac}')">${label}</button>`;
+  }).join("");
+  const extra=`<button class="ghost" style="text-align:left" onclick="wizAccountProvision(null)">
+      ＋ A timer that's not listed <span class="min">— uses your account key</span></button>`;
+  $("#ob_pick_list").innerHTML=rows+extra;
+  wizScreen("pick");
+}
+
+function wizAccountProvision(mac){ startOnboard({mode:"account", device_mac:mac||null}); }
+function wizSelfStart(){ startOnboard({mode:"self", name:val("ob_name_self")||null}); }
+
+async function startOnboard(body){
   try{ await api("POST","/api/onboard/start",body); }
   catch(e){ alert("Couldn't start: "+e.message); return; }
-  $("#ob_pw").value="";                          // don't keep the password in the field
-  for(const s of ["choose","orbit","self"]) $("#ob_"+s).style.display="none";
+  for(const s of OB_SCREENS) $("#ob_"+s).style.display="none";
   $("#ob_steps").style.display="block";
   steps={}; order=[]; $("#ob_steps").innerHTML="";
   es=new EventSource("/api/onboard/stream");
   es.onmessage=(e)=>{ try{ onStep(JSON.parse(e.data)); }catch(_){} };
+}
+
+async function wizForget(){
+  try{ await api("POST","/api/account/forget",{}); }catch(_){}
+  try{ renderChoose(await api("GET","/api/account")); }catch(_){ renderChoose(null); }
 }
 
 function onStep(ev){
