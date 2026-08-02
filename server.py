@@ -350,7 +350,8 @@ class SchedulingBody(BaseModel):
     enabled: bool
 
 
-_fired: set = set()   # (mac, valve, "YYYY-MM-DD HH:MM") already run — one fire per minute
+_fired: set = set()   # (mac, valve, date, rule-start) already run today — one fire per rule/day
+_last_runs: dict = {}  # (mac, valve) -> {timer_index, valve, start, at, ok} latest fire attempt
 
 
 def _host_scheduling_enabled() -> bool:
@@ -360,10 +361,28 @@ def _host_scheduling_enabled() -> bool:
         return False
 
 
+def _next_due(now: datetime):
+    """Soonest upcoming scheduled run across all timers, or None."""
+    import scheduler
+    best = None
+    for i, d in enumerate(onboarding._load_config(CONFIG).get("devices", [])):
+        for r in d.get("schedules", []):
+            if r.get("enabled", True) is False:
+                continue
+            nxt = scheduler.next_occurrence(r.get("start"), r.get("days") or [], now)
+            if nxt and (best is None or nxt < best[0]):
+                best = (nxt, {"timer_index": i, "valve": r.get("valve"), "start": r.get("start"),
+                              "when": nxt.isoformat(timespec="minutes")})
+    return best[1] if best else None
+
+
 @app.get("/api/scheduling")
 async def get_scheduling():
-    """Whether host-driven scheduling is enabled (fires while THIS Mac is running)."""
-    return {"enabled": _host_scheduling_enabled()}
+    """Host-scheduling state: whether it's enabled (fires while THIS Mac runs), the latest run
+    attempts (ok/failed), and the next upcoming run — so the UI can show it's alive & trustworthy."""
+    return {"enabled": _host_scheduling_enabled(),
+            "last_runs": list(_last_runs.values()),
+            "next_due": _next_due(datetime.now())}
 
 
 @app.put("/api/scheduling")
@@ -402,6 +421,9 @@ async def run_due(now: datetime, fire) -> list:
                 ok = await fire(i, r["valve"], r["minutes"])
             except Exception:  # noqa: BLE001 — BLE hiccup: leave unfired so we retry next tick
                 ok = False
+            _last_runs[(d.get("mac"), r["valve"])] = {
+                "timer_index": i, "valve": r["valve"], "start": r["start"],
+                "at": now.isoformat(timespec="seconds"), "ok": bool(ok)}
             if ok:
                 _fired.add(key); fired.append(key)
             # else: not marked -> retried on the next tick while still within the grace window
