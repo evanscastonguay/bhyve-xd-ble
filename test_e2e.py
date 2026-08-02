@@ -2092,6 +2092,51 @@ def test_fire_start_returns_confirmed(monkeypatch, tmp_path):
     assert ok is True and t.watering and t.station == 2       # confirmed Valve 2 watering
 
 
+def test_next_occurrence():
+    from datetime import datetime
+    import scheduler
+    mon = datetime(2026, 8, 3, 6, 30)                       # a Monday 06:30
+    assert scheduler.next_occurrence("07:00", [0], mon) == datetime(2026, 8, 3, 7, 0)   # today
+    assert scheduler.next_occurrence("06:00", [0], mon) == datetime(2026, 8, 10, 6, 0)  # passed -> next Mon
+    assert scheduler.next_occurrence("07:00", [1], mon) == datetime(2026, 8, 4, 7, 0)   # Tue
+    assert scheduler.next_occurrence("07:00", [], mon) is None
+
+
+def test_api_scheduling_reports_next_due_and_last_runs(monkeypatch, tmp_path):
+    import json
+    from datetime import datetime
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"host_scheduling": True, "devices": [
+        {"name": "A", "mac": TEST_MAC, "network_key": TEST_KEY, "stations": 4,
+         "schedules": [{"valve": 2, "start": "06:30", "days": [0, 1, 2, 3, 4, 5, 6], "minutes": 7}]}]}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    monkeypatch.setattr(server, "_fired", set(), raising=False)
+    monkeypatch.setattr(server, "_last_runs", {}, raising=False)
+    st = asyncio.run(server.get_scheduling())
+    assert st["enabled"] is True
+    assert st["next_due"] and st["next_due"]["valve"] == 2      # a next run is computed
+    assert st["last_runs"] == []                                 # nothing fired yet
+    # after a fire, last_runs records it (ok)
+    now = datetime(2026, 8, 3, 6, 30)
+    async def ok_fire(i, valve, minutes): return True
+    asyncio.run(server.run_due(now, ok_fire))
+    st2 = asyncio.run(server.get_scheduling())
+    assert len(st2["last_runs"]) == 1 and st2["last_runs"][0]["ok"] is True
+    assert st2["last_runs"][0]["valve"] == 2 and st2["last_runs"][0]["start"] == "06:30"
+
+
+def test_last_run_records_failure(monkeypatch, tmp_path):
+    from datetime import datetime
+    now = datetime(2026, 8, 3, 6, 30)
+    server = _sched_server(monkeypatch, tmp_path, True, now)
+    monkeypatch.setattr(server, "_last_runs", {}, raising=False)
+    async def bad_fire(i, valve, minutes): return False
+    asyncio.run(server.run_due(now, bad_fire))
+    st = asyncio.run(server.get_scheduling())
+    assert len(st["last_runs"]) == 1 and st["last_runs"][0]["ok"] is False   # failure is visible
+
+
 def test_run_due_idempotent_within_minute(monkeypatch, tmp_path):
     from datetime import datetime
     now = datetime(2026, 8, 3, 6, 30)
