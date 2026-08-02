@@ -378,29 +378,34 @@ function buildScheduleForm(stations){
   $("#sch_days").innerHTML=`<span class="daybox">`+
     DOW.map((d,i)=>`<label><input type="checkbox" class="dchk" value="${i}"${i<5?" checked":""}>${d}</label>`).join("")+`</span>`;
 }
-let schEngine="off";
+let schEngine="off", schStatus={};
 async function schLoad(){
   try{ const r=await api("GET",`/api/timers/${curIndex}/schedules`); schedRules=r.schedules||[]; }
   catch(e){ schedRules=[]; banner("Couldn't load schedules: "+e.message,"err"); }
-  let host=false;
-  try{ host=!!(await api("GET","/api/scheduling")).enabled; }catch(_){}
-  schEngine = host ? "mac" : "off";
+  try{ schStatus=await api("GET","/api/scheduling"); }catch(_){ schStatus={}; }
+  schEngine = schStatus.enabled ? "mac" : "off";
   $("#eng_off").checked = schEngine==="off";
   $("#eng_mac").checked = schEngine==="mac";
   schEngineStatus();
   renderSchedList();
 }
 function schEngineStatus(msg){
-  $("#sch_engine_status").textContent = msg || (
-    schEngine==="mac" ? "Running while this Mac is on. If it sleeps or leaves Bluetooth range, that run is missed."
-    : "Off — rules are saved but nothing runs them.");
+  if(msg){ $("#sch_engine_status").textContent=msg; return; }
+  let s = schEngine==="mac"
+    ? "Running while this Mac is on (it must stay awake & in Bluetooth range)."
+    : "Off — rules are saved but nothing runs them.";
+  const nd=schStatus.next_due;
+  if(schEngine==="mac" && nd) s+=` · Next: Valve ${nd.valve} at ${(nd.when||"").slice(11,16)} (${(nd.when||"").slice(5,10)}).`;
+  const lr=schStatus.last_runs||[];
+  if(lr.length){ const L=lr[lr.length-1]; s+=` · Last: Valve ${L.valve} ${L.start} ${L.ok?"✓":"✗"}.`; }
+  $("#sch_engine_status").textContent=s;
 }
 async function schSetEngine(engine){
   if(busy)return; setBusy(true,"applying…"); banner(null);
   try{
     await api("PUT","/api/scheduling",{enabled: engine==="mac"});
-    schEngine=engine; banner(engine==="mac"?"Now running while this Mac is on.":"Scheduling off.","ok");
-    schEngineStatus();
+    banner(engine==="mac"?"Now running while this Mac is on.":"Scheduling off.","ok");
+    await schLoad();                                   // refresh status (next-due / last-run)
   }catch(e){ banner("Couldn't apply: "+e.message,"err"); await schLoad(); }
   setBusy(false);
 }
