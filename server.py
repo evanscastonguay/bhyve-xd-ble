@@ -298,6 +298,43 @@ async def devices():
              "stations": int(d.get("stations", 4))} for i, d in enumerate(devs)]
 
 
+class SchedulesBody(BaseModel):
+    rules: list[dict] = Field(default_factory=list,
+                              description="[{valve,start 'HH:MM',days[0..6],minutes,enabled}]")
+
+
+def _mac_at(index: int) -> str:
+    """MAC of the timer at 0-based index, or 404. Schedules are keyed by MAC (stable)."""
+    with open(CONFIG) as f:
+        devs = json.load(f).get("devices", [])
+    if not 0 <= index < len(devs):
+        raise HTTPException(404, f"no timer at index {index}")
+    mac = devs[index].get("mac")
+    if not mac:
+        raise HTTPException(409, "this timer has no MAC yet — cannot store schedules")
+    return mac
+
+
+@app.get("/api/timers/{index}/schedules")
+async def get_schedules(index: int):
+    """The timer's saved watering rules (no BLE, no key). Engine-agnostic store."""
+    import schedule as sched
+    return {"schedules": sched.read_schedules(CONFIG, _mac_at(index))}
+
+
+@app.put("/api/timers/{index}/schedules")
+async def put_schedules(index: int, body: SchedulesBody):
+    """Validate + persist the timer's rules. 400 on a bad rule (nothing written).
+    Saving does NOT run anything yet — an engine wires these up later."""
+    import schedule as sched
+    mac = _mac_at(index)
+    try:
+        sched.write_schedules(CONFIG, mac, body.rules)
+    except sched.ScheduleError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"schedules": sched.read_schedules(CONFIG, mac)}
+
+
 @app.get("/api/onboard/state")
 async def onboard_state():
     """Tell the UI whether a saved account key exists — if so, adding another timer
