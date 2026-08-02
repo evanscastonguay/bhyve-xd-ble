@@ -522,6 +522,68 @@ def test_onboard_start_account_mode_falls_back_to_saved_key(monkeypatch, tmp_pat
     assert captured["key"] == "ee" * 16                                     # from persisted account
 
 
+def test_onboard_start_supersedes_stale_job(monkeypatch, tmp_path):
+    """A new onboarding start must SUPERSEDE a stale/awaiting job (cancel it) instead of
+    409 'already running' — the bug where an abandoned flow wedged the Add button."""
+    import server
+    import onboarding as O
+    monkeypatch.setattr(server, "CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+
+    async def hang_flow(params, gate):
+        yield {"id": "await_reset", "title": "Reset", "instruction": "reset it",
+               "state": "waiting_user", "verified": False}
+        await gate.wait()          # never resumed -> job hangs (the stale-job scenario)
+        yield {"id": "save", "title": "Saved", "instruction": "", "state": "done", "verified": True}
+
+    monkeypatch.setattr(O, "onboard_flow", hang_flow)
+
+    async def scenario():
+        await server.onboard_start(server.OnboardStartBody(mode="self"))
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if server._job.events:
+                break
+        first = server._job                       # hung, not done
+        assert not first.done
+        r = await server.onboard_start(server.OnboardStartBody(mode="self"))  # must NOT raise 409
+        assert r["ok"] is True
+        assert server._job is not first           # a fresh job replaced it
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert first.task.cancelled() or first.done   # the stale task was cancelled/ended
+
+    asyncio.run(scenario())
+
+
+def test_onboard_cancel_clears_job(monkeypatch, tmp_path):
+    import server
+    import onboarding as O
+    monkeypatch.setattr(server, "CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setattr(server, "_job", None, raising=False)
+
+    async def hang_flow(params, gate):
+        yield {"id": "await_reset", "title": "Reset", "instruction": "", "state": "waiting_user",
+               "verified": False}
+        await gate.wait()
+
+    monkeypatch.setattr(O, "onboard_flow", hang_flow)
+
+    async def scenario():
+        await server.onboard_start(server.OnboardStartBody(mode="self"))
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if server._job.events:
+                break
+        r = await server.onboard_cancel()
+        assert r["ok"] is True
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert server._job is None                 # cleared
+
+    asyncio.run(scenario())
+
+
 def test_api_run_blocks_during_onboarding(monkeypatch):
     """Control endpoints must refuse (503) while an onboarding job is running, to avoid
     two BLE operations on the one radio."""
