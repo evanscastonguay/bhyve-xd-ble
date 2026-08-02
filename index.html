@@ -59,26 +59,56 @@
     <div id="onboard" style="display:none;margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
       <div style="font-weight:600;margin-bottom:8px">Add a timer</div>
 
-      <div id="ob_mode">
-        <div class="hint" style="margin-top:0">How should we set it up?</div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0">
-          <button class="bon" onclick="wizStart('orbit')">Use my Orbit account</button>
-          <button class="ghost" onclick="wizStart('self')">Standalone (my own key)</button>
+      <!-- Screen 1: choose a path -->
+      <div id="ob_choose">
+        <div class="hint" style="margin-top:0">How do you want to set it up?</div>
+        <div id="ob_reuse_row" style="display:none;margin:10px 0 0">
+          <button class="bon" style="width:100%;text-align:left" onclick="wizGo('reuse')">
+            ＋ Add another timer <span class="min">— reuses your saved Orbit key, no login</span></button>
         </div>
-        <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:460px">
-          <label for="ob_name">Name</label>
-          <input id="ob_name" type="text" placeholder="e.g. Back Yard" style="width:100%">
-          <label for="ob_mac">MAC <span class="min">(optional)</span></label>
+        <div style="display:grid;gap:8px;margin:10px 0">
+          <button class="bon" style="text-align:left" onclick="wizScreen('orbit')">
+            Use my Orbit account <span class="min">— the Orbit app keeps working too</span></button>
+          <button class="ghost" style="text-align:left" onclick="wizScreen('self')">
+            Standalone <span class="min">— your own key, no Orbit account (the app can't control it)</span></button>
+        </div>
+        <div style="margin-top:6px"><button class="ghost" onclick="toggleOnboard()">Cancel</button></div>
+      </div>
+
+      <!-- Screen 2a: Orbit login -->
+      <div id="ob_orbit" style="display:none">
+        <div style="font-weight:600;margin-bottom:6px">Sign in to Orbit</div>
+        <div class="hint" style="margin-top:0;margin-bottom:10px">Used once to fetch your account key
+          so the Orbit app and this page share it. Your password is never stored.</div>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:420px">
+          <label for="ob_email">Email</label>
+          <input id="ob_email" type="email" oninput="orbitValidate()" placeholder="you@example.com" style="width:100%">
+          <label for="ob_pw">Password</label>
+          <input id="ob_pw" type="password" oninput="orbitValidate()" style="width:100%">
+          <label for="ob_name">Timer name</label>
+          <input id="ob_name" type="text" placeholder="optional, e.g. Back Yard" style="width:100%">
+          <label for="ob_mac">MAC <span class="min">(adv.)</span></label>
           <input id="ob_mac" type="text" placeholder="only if several timers are nearby" style="width:100%">
-          <label for="ob_email">Orbit email</label>
-          <input id="ob_email" type="email" placeholder="for “Use my Orbit account”" style="width:100%">
-          <label for="ob_pw">Orbit password</label>
-          <input id="ob_pw" type="password" placeholder="used once, never stored" style="width:100%">
         </div>
-        <div class="hint">“Use my Orbit account” shares the app's key so the Orbit app keeps
-          working. “Standalone” makes its own key — no Orbit account needed, but the app
-          can't control it (we save the key for you).</div>
-        <div style="margin-top:10px"><button class="ghost" onclick="toggleOnboard()">Cancel</button></div>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button class="bon" id="ob_signin" onclick="wizGo('orbit')" disabled>Sign in &amp; find my timer</button>
+          <button class="ghost" onclick="wizScreen('choose')">Back</button>
+        </div>
+      </div>
+
+      <!-- Screen 2b: Standalone -->
+      <div id="ob_self" style="display:none">
+        <div style="font-weight:600;margin-bottom:6px">Standalone (your own key)</div>
+        <div class="hint" style="margin-top:0;margin-bottom:10px">We generate a key just for this timer —
+          no Orbit account. The Orbit app won't control it; the key is saved to secrets/ (back it up).</div>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:13px;max-width:420px">
+          <label for="ob_name_self">Timer name</label>
+          <input id="ob_name_self" type="text" placeholder="optional, e.g. Back Yard" style="width:100%">
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button class="bon" onclick="wizGo('self')">Set up standalone</button>
+          <button class="ghost" onclick="wizScreen('choose')">Back</button>
+        </div>
       </div>
 
       <div id="ob_steps" style="display:none"></div>
@@ -199,20 +229,37 @@ async function loadDevices(){
 let es=null, steps={}, order=[];
 const val=(id)=>($("#"+id).value||"").trim();
 
-function toggleOnboard(){
-  const el=$("#onboard"); const show=el.style.display==="none";
-  el.style.display=show?"block":"none";
-  $("#ob_mode").style.display="block"; $("#ob_steps").style.display="none"; $("#ob_steps").innerHTML="";
-  if(es){es.close();es=null;}
+function wizScreen(name){
+  for(const s of ["choose","orbit","self"]) $("#ob_"+s).style.display=(s===name)?"block":"none";
+  $("#ob_steps").style.display="none";
+  if(name==="orbit") orbitValidate();
 }
 
-async function wizStart(mode){
-  const body={mode, name:val("ob_name")||null, device_mac:val("ob_mac")||null,
-              email:val("ob_email")||null, password:$("#ob_pw").value||null};
+function orbitValidate(){   // can't submit an empty login
+  $("#ob_signin").disabled = !(val("ob_email") && $("#ob_pw").value);
+}
+
+async function toggleOnboard(){
+  const el=$("#onboard"); const show=el.style.display==="none";
+  el.style.display=show?"block":"none";
+  if(es){es.close();es=null;}
+  if(show){
+    wizScreen("choose");
+    try{ const s=await api("GET","/api/onboard/state"); $("#ob_reuse_row").style.display=s.has_key?"block":"none"; }
+    catch(_){ $("#ob_reuse_row").style.display="none"; }
+  }
+}
+
+async function wizGo(mode){
+  let body={mode};
+  if(mode==="orbit") body={mode, email:val("ob_email")||null, password:$("#ob_pw").value||null,
+                           name:val("ob_name")||null, device_mac:val("ob_mac")||null};
+  else if(mode==="self") body={mode, name:val("ob_name_self")||null};
   try{ await api("POST","/api/onboard/start",body); }
   catch(e){ alert("Couldn't start: "+e.message); return; }
   $("#ob_pw").value="";                          // don't keep the password in the field
-  $("#ob_mode").style.display="none"; $("#ob_steps").style.display="block";
+  for(const s of ["choose","orbit","self"]) $("#ob_"+s).style.display="none";
+  $("#ob_steps").style.display="block";
   steps={}; order=[]; $("#ob_steps").innerHTML="";
   es=new EventSource("/api/onboard/stream");
   es.onmessage=(e)=>{ try{ onStep(JSON.parse(e.data)); }catch(_){} };
@@ -266,7 +313,7 @@ async function wizDone(){
   log("✓ onboarding complete","ok");
   const devs=await loadDevices();
   if(devs.length){curDevice=String(devs[devs.length-1].index); $("#device").value=curDevice;}
-  $("#onboard").style.display="none"; $("#ob_mode").style.display="block"; $("#ob_steps").style.display="none";
+  $("#onboard").style.display="none"; wizScreen("choose");
   $("#log").innerHTML=""; if(devs.length) await loadDevice();
 }
 
