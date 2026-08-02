@@ -908,6 +908,47 @@ def test_provision_device_persists_via_station_config():
     assert mac == TEST_MAC
 
 
+def test_proof_evaluator_gates_correctly():
+    """The proof's pass/fail evaluator must PASS only on the full non-circular chain:
+    keyless-first + provisioned + all >= MIN_CYCLES power-cycle verifies succeed."""
+    from provision_proof import evaluate_trial, MIN_CYCLES
+    ok_cycles = [True] * MIN_CYCLES
+    # the one and only PASS
+    assert evaluate_trial(False, True, ok_cycles)[0] is True
+    # negative control decoded -> confounded -> FAIL
+    assert evaluate_trial(True, True, ok_cycles)[0] is False
+    # not provisioned -> FAIL
+    assert evaluate_trial(False, False, ok_cycles)[0] is False
+    # too few cycles -> FAIL
+    assert evaluate_trial(False, True, [True] * (MIN_CYCLES - 1))[0] is False
+    # a cycle failed (key didn't persist) -> FAIL
+    assert evaluate_trial(False, True, [True, False, True])[0] is False
+
+
+def test_provision_device_refuses_multiple_fresh_devices():
+    """SAFETY (P0): with >1 fresh B-Hyve present, provision_device must refuse and write
+    the key to NEITHER — never spray the account key onto an unknown device."""
+    import onboarding as O
+    a = FakeTimer(mac="44:67:55:D8:7A:B9", key_hex=None)
+    b = FakeTimer(mac="44:67:55:D8:71:B0", key_hex=None)
+    adverts = [_adv("UUID-A", "", -50), _adv("UUID-B", "", -55)]
+    resolver = lambda addr: {"UUID-A": a, "UUID-B": b}.get(addr)
+    with fake_catch_ble(adverts, resolver):
+        with pytest.raises(O.ResolveError):
+            asyncio.run(O.provision_device(TEST_KEY, want_mac="44:67:55:D8:71:B0", scan_timeout=2.0))
+    assert a._provision_write is None            # key was NOT written to either device
+    assert b._provision_write is None
+
+
+def test_provision_device_reports_wanted_mac_mismatch():
+    """If the single caught device's MAC != want_mac, report it (don't hunt/write others)."""
+    import onboarding as O
+    only = FakeTimer(mac="44:67:55:D8:7A:B9", key_hex=None)
+    with fake_catch_ble([_adv("UUID-ONLY", "", -50)], lambda _a: only):
+        with pytest.raises(O.ResolveError):
+            asyncio.run(O.provision_device(TEST_KEY, want_mac="44:67:55:D8:71:B0", scan_timeout=2.0))
+
+
 def test_provision_device_times_out_when_no_bhyve():
     import onboarding as O
     with fake_catch_ble([_adv("UUID-DECOY", "TV", -40)], lambda _a: None):
