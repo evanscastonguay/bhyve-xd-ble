@@ -462,11 +462,14 @@ PROVISION_CHAR = "00006c76-fe32-4f58-8b78-98e42b2c047f"
 
 async def provision_device(network_key_hex: str, *, want_mac: str | None = None,
                            scan_timeout: float = 90.0, near_rssi: int = -80,
-                           tz_offset_sec: int | None = None, max_probe: int = 8) -> tuple[str, str, object]:
-    """Enroll a FACTORY-FRESH (pairing-mode) B-Hyve XD app-free: catch it, write the
-    account key to the 6c76 characteristic (0x0100 || 16-byte key), then verify with our
-    normal handshake + read-back. Returns (address, device_mac, DeviceStatus). Raises
-    ResolveError on timeout.
+                           tz_offset_sec: int | None = None, max_probe: int = 8,
+                           reconnect_attempts: int = 4) -> tuple[str, str, object]:
+    """Enroll a FACTORY-FRESH (pairing-mode) B-Hyve XD app-free. TWO-PHASE (the device
+    drops the BLE link after keying, like the official app which re-connects):
+      A) identify the sole fresh B-Hyve and write 0x0100||key to char 6c76, then release;
+      B) reconnect (now keyed), run the finalize sequence (provision_setup, incl. field
+         94), and verify by read-back.
+    Returns (address, device_mac, DeviceStatus). Raises ResolveError on failure.
 
     SAFETY: a fresh device has no readable MAC before the write, so we cannot pick the
     right one after the fact. To avoid ever writing the account key to the wrong device,
@@ -532,33 +535,49 @@ async def provision_device(network_key_hex: str, *, want_mac: str | None = None,
             f"no B-Hyve found within {scan_timeout:.0f}s (saw {len(seen)} device(s)) — is the "
             "target factory-reset and in PAIRING MODE, phone Bluetooth OFF, and close to the Mac?")
 
-    # 3) Exactly one B-Hyve — safe to write the key + finalize, then verify.
+    # 3) Exactly one B-Hyve. PHASE A: write the key, then release. The device drops the
+    #    BLE link after keying (the app re-connects too), so we do NOT reuse this session.
     dev, client = bhyve[0]
     try:
         await client.write_gatt_char(PROVISION_CHAR, payload, response=True)
-        sess = BHyveXD(dev.address, network_key_hex, tz_offset_sec=tz).session(client=client)
-        await sess.__aenter__()
-        await sess.provision_setup()
-        st = await sess.read_status()
     except Exception as err:
         try:
             await client.disconnect()
         except Exception:
             pass
-        raise ResolveError(
-            f"provision of {dev.address} FAILED after the key write — the device may be "
-            f"partially provisioned; power-cycle it and retry: {err}") from err
+        raise ResolveError(f"key write to {dev.address} failed: {err}") from err
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
 
-    if st is None or not st.device_mac:
-        await sess.__aexit__(None, None, None)
-        raise ResolveError(f"provisioned {dev.address} but got no decodable status read-back")
-    if want and st.device_mac.upper() != want:
-        await sess.__aexit__(None, None, None)
-        raise ResolveError(
-            f"provisioned the only nearby device but its MAC {st.device_mac} != requested "
-            f"{want_mac} — wrong unit isolated?")
-    await sess.__aexit__(None, None, None)
-    return dev.address, st.device_mac, st
+    # PHASE B: reconnect (device is now keyed + re-advertising) to run the FINALIZE
+    # sequence (provision_setup, incl. field 94) and verify by read-back. Retry with
+    # backoff because the device may still be settling / re-advertising after keying.
+    last = None
+    for _attempt in range(reconnect_attempts):
+        try:
+            addr, mac, st, sess = await catch_device_session(
+                network_key_hex, want_mac=want_mac, scan_timeout=min(scan_timeout, 45.0),
+                near_rssi=near_rssi, tz_offset_sec=tz)
+        except ResolveError as e:
+            last = e
+            await asyncio.sleep(2.0)
+            continue
+        try:
+            await sess.provision_setup()          # the finalize (field 94 etc.)
+            st2 = await sess.read_status()
+        finally:
+            try:
+                await sess.__aexit__(None, None, None)
+            except Exception:
+                pass
+        final = st2 or st
+        return addr, (final.device_mac if final and final.device_mac else mac), final
+
+    raise ResolveError(
+        f"key was written to {dev.address} but it could not be re-contacted to finalize/"
+        f"verify after {reconnect_attempts} attempt(s) ({last}) — power-cycle and retry")
 
 
 async def catch_device(network_key_hex: str, *, want_mac: str | None = None,
