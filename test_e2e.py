@@ -1416,6 +1416,57 @@ def test_write_config_refuses_to_clobber_malformed(tmp_path):
     assert p.read_text() == "{ this is not json "   # original left intact
 
 
+# --- P1: account model (email + key persisted; password NEVER) ---------------
+def test_account_roundtrip(tmp_path):
+    import onboarding as O
+    p = tmp_path / "config.json"
+    assert O.read_account(str(p)) is None                 # absent
+    O.write_account(str(p), "me@x.com", TEST_KEY)
+    acct = O.read_account(str(p))
+    assert acct == {"email": "me@x.com", "network_key": TEST_KEY}
+
+
+def test_write_account_preserves_devices(tmp_path):
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    O.write_config(str(p), {"name": "A", "address": "UUID-A", "network_key": TEST_KEY,
+                            "mac": TEST_MAC, "stations": 4})
+    O.write_account(str(p), "me@x.com", TEST_KEY)
+    cfg = json.loads(p.read_text())
+    assert cfg["account"]["email"] == "me@x.com"
+    assert len(cfg["devices"]) == 1 and cfg["devices"][0]["mac"] == TEST_MAC  # devices intact
+
+
+def test_write_config_preserves_account(tmp_path):
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    O.write_account(str(p), "me@x.com", TEST_KEY)
+    O.write_config(str(p), {"name": "A", "address": "UUID-A", "network_key": TEST_KEY,
+                            "mac": TEST_MAC, "stations": 4})
+    cfg = json.loads(p.read_text())
+    assert cfg["account"]["email"] == "me@x.com"          # account survives a device write
+    assert cfg["devices"][0]["mac"] == TEST_MAC
+
+
+def test_read_account_none_on_device_only_config(tmp_path):
+    import onboarding as O
+    p = tmp_path / "config.json"
+    O.write_config(str(p), {"name": "A", "address": "UUID-A", "network_key": TEST_KEY,
+                            "mac": TEST_MAC, "stations": 4})
+    assert O.read_account(str(p)) is None                 # backward compatible
+
+
+def test_write_account_refuses_to_clobber_malformed(tmp_path):
+    import onboarding as O
+    p = tmp_path / "config.json"
+    p.write_text("{ not json ")
+    with pytest.raises(ValueError):
+        O.write_account(str(p), "me@x.com", TEST_KEY)
+    assert p.read_text() == "{ not json "                 # original left intact
+
+
 def test_resolve_linux_returns_mac():
     import onboarding as O
     got = asyncio.run(O.resolve_address(TEST_MAC, TEST_KEY, platform_name="linux"))
