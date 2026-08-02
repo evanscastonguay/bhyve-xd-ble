@@ -41,7 +41,7 @@ async def _lifespan(app):
         task.cancel()
 
 
-app = FastAPI(title="B-Hyve XD Local API", version="1.2.0", lifespan=_lifespan)
+app = FastAPI(title="B-Hyve XD Local API", version="1.3.0", lifespan=_lifespan)
 _ble_lock = asyncio.Lock()   # the radio does one thing at a time
 _job = None                  # the single in-flight onboarding job (or None)
 _account_session = None       # in-memory only: {email, key, devices}. NEVER persisted;
@@ -297,6 +297,36 @@ async def remove_device(index: int):
 async def index():
     # no-store: this control UI must never be served stale from browser cache
     return FileResponse(INDEX, headers={"Cache-Control": "no-store"})
+
+
+def _read_version():
+    """Running build identity. The deploy writes a VERSION file ('{git_sha}\\n{iso8601}') into the
+    release dir; fall back to a live short git SHA, else 'dev'. Never raises — it feeds the deploy
+    health-check, which must always get an answer."""
+    import subprocess
+    git_sha = released_at = None
+    try:
+        lines = [ln.strip() for ln in open(os.path.join(HERE, "VERSION")).read().splitlines()]
+        git_sha = lines[0] if lines and lines[0] else None
+        released_at = lines[1] if len(lines) > 1 and lines[1] else None
+    except OSError:
+        pass
+    if not git_sha:
+        try:
+            git_sha = subprocess.run(
+                ["git", "-C", HERE, "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=3,
+            ).stdout.strip() or "dev"
+        except Exception:
+            git_sha = "dev"
+    return {"version": app.version, "git_sha": git_sha, "released_at": released_at}
+
+
+@app.get("/api/version")
+async def version():
+    """Report the running build (deploy stamps a VERSION file). The deploy health-check polls this
+    to confirm the box switched to the new release before declaring success."""
+    return _read_version()
 
 
 @app.get("/api/devices")
