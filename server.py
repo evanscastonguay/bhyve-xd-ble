@@ -177,7 +177,8 @@ async def remove_device(index: int):
 
 @app.get("/")
 async def index():
-    return FileResponse(INDEX)
+    # no-store: this control UI must never be served stale from browser cache
+    return FileResponse(INDEX, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/devices")
