@@ -152,8 +152,9 @@ class FakeTimer:
     def _status_plaintext(self) -> bytes:
         body = B._fb(1, self.mac_bytes) + B._fv(7, self.clock)
         if self.watering:
-            # field 6 = active run: tfn1 = 1-indexed station, tfn7 = seconds (mirrors real device)
-            sub = B._fv(1, 4) + B._fb(6, B._fv(1, self.station or 0) + B._fv(7, self.seconds or 0))
+            # field 6 = active run: tfn1 = constant run-type(2), tfn4 = 1-indexed station,
+            # tfn7 = seconds (mirrors the real device wire format)
+            sub = B._fv(1, 4) + B._fb(6, B._fv(1, 2) + B._fv(4, self.station or 0) + B._fv(7, self.seconds or 0))
         else:
             sub = B._fv(1, 1)
         body += B._fb(16, sub)
@@ -271,15 +272,28 @@ _REAL_WATERING = bytes.fromhex(
 _REAL_IDLE = bytes.fromhex(
     "aa775a0f37000a06446755d871b038e3d5bdd3068201240800120208003a00480050006a04080020"
     "0072031889167a0082010800000000000000006296")
+# Same device, Valve 3 running — proves the parser DISTINGUISHES zones (field 16->6->tfn4
+# = 3 here vs 2 above; tfn1 is a constant 2 in both, which is why reading it lit all as #2).
+_REAL_WATERING_Z3 = bytes.fromhex(
+    "aa775a0f5b000a06446755d871b038d0ddbdd3068201480804120f0802120b10001a05080310ac02"
+    "2000321508021800200328ac0232070800100318ac0238ac023a00480050006a0408002000720318"
+    "fc157a0082010800000000000000007ac7")
 
 
 def test_active_zone_parsed_from_real_watering_capture():
-    """PROOF (real device bytes): while Valve 2 waters, the status carries the active
-    station (field 16->6->tfn1 = 2, 1-indexed) — so the UI can light only that valve."""
+    """PROOF (real device bytes): while Valve 2 waters, active station = field 16->6->tfn4 = 2."""
     st = parse_reply(_REAL_WATERING)
     assert st.is_watering is True and st.seconds_remaining == 300
     assert st.active_zone == 2                       # matches the physical Valve 2
     assert st.to_dict()["active_zone"] == 2          # surfaced to the REST/UI layer
+
+
+def test_active_zone_distinguishes_zones_real_capture():
+    """PROOF the fix isn't a Valve-2 coincidence: Valve 3 capture -> active_zone == 3
+    (tfn4 tracks the zone; tfn1 is a constant 2 in both captures)."""
+    z2 = parse_reply(_REAL_WATERING)
+    z3 = parse_reply(_REAL_WATERING_Z3)
+    assert z2.active_zone == 2 and z3.active_zone == 3
 
 
 def test_active_zone_none_when_idle_real_capture():
