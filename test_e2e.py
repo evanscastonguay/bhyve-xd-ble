@@ -946,7 +946,8 @@ def test_provision_device_reports_wanted_mac_mismatch():
     only = FakeTimer(mac="AA:BB:CC:DD:EE:FF", key_hex=None)
     with fake_catch_ble([_adv("UUID-ONLY", "", -50)], lambda _a: only):
         with pytest.raises(O.ResolveError):
-            asyncio.run(O.provision_device(TEST_KEY, want_mac="AA:BB:CC:DD:EE:01", scan_timeout=2.0))
+            asyncio.run(O.provision_device(TEST_KEY, want_mac="AA:BB:CC:DD:EE:01",
+                                           scan_timeout=0.4, reconnect_attempts=1))
 
 
 def test_provision_device_times_out_when_no_bhyve():

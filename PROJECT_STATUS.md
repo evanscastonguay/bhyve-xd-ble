@@ -121,7 +121,11 @@ default. Multiple timers on one account share one account key.
   (a plain `arm()` isn't enough); decrypting a full app-enrollment capture revealed the
   finalize sequence, now replayed by `provision_setup()`. **Live gate pending**: needs
   one more factory reset to confirm the key survives a power-cycle. Mechanism +
-  correction: `SPIKE_provisioning.md`.
+  correction: `SPIKE_provisioning.md`. A first proof run (`provision_proof.py`, 2026-08-02)
+  passed the negative control + key write but exposed that the **device drops the BLE link
+  right after keying** — `provision_device` is now **two-phase** (write key → reconnect →
+  finalize + verify), safety-hardened (refuses >1 fresh device), but the durability verdict
+  is **still unconfirmed** (re-run the proof).
 - **Catch-once-and-hold resident server** (`PLAN_catch_and_hold.md`) — deferred; the
   stable UUID made it unnecessary for the current units.
 - **Linux/BlueZ headless host** — addresses by MAC (no rotating-UUID problem); the
