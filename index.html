@@ -228,6 +228,7 @@ async function loadDevices(){
 // ---- onboarding wizard (SSE step tracker) ----
 let es=null, steps={}, order=[];
 const val=(id)=>($("#"+id).value||"").trim();
+const esc=(s)=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 
 function wizScreen(name){
   for(const s of ["choose","orbit","self"]) $("#ob_"+s).style.display=(s===name)?"block":"none";
@@ -291,7 +292,11 @@ function renderSteps(){
           <div><span class="${cls}">${icon}</span> <b>${s.title}</b>${wait}</div>
           <div class="hint" style="margin-top:2px">${s.instruction||""}</div>`;
     if(s.state==="waiting_user"){
-      if(s.id==="fallback_choice"){
+      if(Array.isArray(s.options)){                    // device picker: one button per timer
+        h+=`<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">`+
+           s.options.map(o=>`<button class="bon" onclick="wizChoose('${String(o.value).replace(/'/g,"\\'")}')">${esc(o.label)}</button>`).join("")+
+           `</div>`;
+      }else if(s.id==="fallback_choice"){
         h+=`<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
               <button class="bon" onclick="wizChoose('orbit_app_first')">Set up in the Orbit app first</button>
               <button class="ghost" onclick="wizChoose('self_key')">Standalone (my own key)</button></div>`;

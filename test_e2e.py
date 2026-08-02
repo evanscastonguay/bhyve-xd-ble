@@ -1050,6 +1050,47 @@ def test_onboard_flow_orbit_success(tmp_path, monkeypatch):
     assert TEST_KEY not in json.dumps(events)            # key never in an event
 
 
+def test_onboard_flow_multiple_devices_shows_picker(tmp_path, monkeypatch):
+    """Login OK but the account has >1 key-bearing timer: the flow must present a
+    pick_device choice (by name) and provision the CHOSEN device's key — not dead-end.
+    This is the real bug: login worked in the app, but the web client had two timers
+    and no MAC, so it reported 'no device on account'."""
+    import json
+    import onboarding as O
+    p = tmp_path / "config.json"
+    KEY_A, KEY_B = "aa" * 16, "bb" * 16
+
+    async def multi_cloud(email, pw):
+        return [
+            {"name": "zone1-4 timer", "mac": "AA:BB:CC:DD:EE:02", "network_key": KEY_A, "stations": 4},
+            {"name": "Smart Hose Tap Timer", "mac": "AA:BB:CC:DD:EE:01", "network_key": KEY_B, "stations": 4},
+        ]
+
+    captured = {}
+
+    async def cap_provision(key, *, want_mac=None, **kw):
+        captured["key"], captured["mac"] = key, want_mac
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
+
+    monkeypatch.setattr(O, "cloud_fetch", multi_cloud)
+    monkeypatch.setattr(O, "provision_device", cap_provision)
+    gate = O.OnboardGate()
+    params = {"mode": "orbit", "email": "me@x.com", "password": "pw", "path": str(p)}  # no device_mac
+    events = asyncio.run(_drive_onboard(
+        O.onboard_flow(params, gate), gate,
+        {"pick_device": "AA:BB:CC:DD:EE:01", "await_reset": None}))
+
+    pick = next(e for e in events if e["id"] == "pick_device" and e["state"] == "waiting_user")
+    assert {o["value"] for o in pick["options"]} == {"AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:01"}
+    assert any(o["label"] == "Smart Hose Tap Timer" for o in pick["options"])  # picked by NAME
+    assert captured["key"] == KEY_B                       # the CHOSEN device's key provisions
+    saved = json.loads(p.read_text())["devices"][0]
+    assert saved["key_source"] == "orbit" and saved["network_key"] == KEY_B
+    assert saved["name"] == "Smart Hose Tap Timer"
+    assert KEY_A not in json.dumps(events) and KEY_B not in json.dumps(events)  # no key leaks
+
+
 def test_onboard_flow_auth_fail_then_self_key(tmp_path, monkeypatch):
     import json
     import onboarding as O
