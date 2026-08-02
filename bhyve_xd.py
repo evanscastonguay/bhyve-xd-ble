@@ -275,12 +275,16 @@ class BHyveXD:
     """
 
     def __init__(self, address: str, network_key_hex: str, *, tz_offset_sec: int = -14400,
-                 name: str = "B-Hyve XD", stations: int = 4):
+                 name: str = "B-Hyve XD", stations: int = 4, device_active_mask: int = 0):
         self.address = address
         self.key = bytes.fromhex(network_key_hex)
         self.tz_offset_sec = tz_offset_sec
         self.name = name
         self.stations = stations
+        # bitmask of on-device programs that should stay enabled. arm() sends
+        # setActivePrograms{0} (SETUP_FIELD20) every connect, so we re-enable this after
+        # arming — otherwise any control session would silently disable the user's schedule.
+        self.device_active_mask = device_active_mask
 
     @classmethod
     def from_config(cls, path: str = "config.json", device: "int | str | None" = None) -> "BHyveXD":
@@ -305,7 +309,8 @@ class BHyveXD:
         return cls(d["address"], d["network_key"],
                    tz_offset_sec=int(d["tz_offset_sec"]) if "tz_offset_sec" in d else host_tz_offset(),
                    name=d.get("name", "B-Hyve XD"),
-                   stations=int(d.get("stations", 4)))
+                   stations=int(d.get("stations", 4)),
+                   device_active_mask=int(d.get("device_active_mask", 0)))
 
     def session(self, *, scan_timeout: float = 30.0, connect_attempts: int = 3, client=None):
         """Low-level: open a BLE session for manual arm()/command/read control.
@@ -430,6 +435,10 @@ class _Session:
         for m in (ts, st, msg_get_status(), msg_get_battery(),
                   SETUP_FIELD22, SETUP_FIELD20, SETUP_FIELD120, ts, st):
             await self._send(m)
+        # SETUP_FIELD20 above is setActivePrograms{0} — it disabled every program. Re-enable
+        # the ones that should stay active on the device, so control never wipes a schedule.
+        if self._dev.device_active_mask:
+            await self._send(_wrap(_fb(20, _fv(1, self._dev.device_active_mask))))
 
     async def provision_setup(self):
         """The app's FIRST-enrollment setup sequence, sent right after the 6c76 key
