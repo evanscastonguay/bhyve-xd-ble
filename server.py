@@ -189,8 +189,8 @@ async def onboard_start(body: OnboardStartBody):
     """Launch the guided onboarding flow (one at a time). Progress is read from
     GET /api/onboard/stream; human steps are advanced with POST /api/onboard/continue."""
     global _job
-    if _job is not None and not _job.done:
-        raise HTTPException(409, "an onboarding session is already running")
+    if _job is not None and not _job.done and _job.task is not None:
+        _job.task.cancel()          # supersede a stale/awaiting job rather than 409-blocking it
     _job = _OnboardJob()
     params = {"mode": body.mode, "email": body.email, "password": body.password,
               "name": body.name, "device_mac": body.device_mac, "path": CONFIG,
@@ -214,6 +214,17 @@ async def onboard_start(body: OnboardStartBody):
         params["name"], params["stations"] = name, stations
     _job.task = asyncio.create_task(_job.run(params))
     return {"ok": True, "mode": body.mode}
+
+
+@app.post("/api/onboard/cancel")
+async def onboard_cancel():
+    """Cancel the current onboarding job (if any) and clear it, so the UI can leave the
+    add flow cleanly without wedging the next start."""
+    global _job
+    if _job is not None and not _job.done and _job.task is not None:
+        _job.task.cancel()
+    _job = None
+    return {"ok": True}
 
 
 @app.post("/api/onboard/continue")
