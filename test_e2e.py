@@ -485,6 +485,66 @@ def test_api_version_falls_back_without_file(monkeypatch, tmp_path):
     assert got["released_at"] is None
 
 
+class _CacheStatus:
+    """Stand-in DeviceStatus for cache tests (has .is_watering + .to_dict())."""
+    def __init__(self, watering, zone=None):
+        self.is_watering = watering
+        self._zone = zone
+    def to_dict(self):
+        return {"is_watering": self.is_watering, "run_state": 4 if self.is_watering else 0,
+                "active_zone": self._zone, "seconds_remaining": 60 if self.is_watering else None,
+                "clock": "12:00:00 UTC", "device_time": 0}
+
+
+class _CacheDev:
+    """Minimal device that COUNTS status() BLE calls, to prove the cache avoids them."""
+    def __init__(self):
+        self.address = "cache-dev"; self.name = "Cache"; self.stations = 4
+        self.status_calls = 0; self._watering = False
+    async def status(self):
+        self.status_calls += 1
+        return _CacheStatus(self._watering)
+    async def start(self, zone, secs):
+        self._watering = True; return _CacheStatus(True, zone)
+    async def stop(self, zone=None):
+        self._watering = False; return _CacheStatus(False)
+
+
+def _use_cache_dev(monkeypatch):
+    import server
+    server._status_cache.clear(); server._status_refreshing.clear()
+    dev = _CacheDev()
+    monkeypatch.setattr(server, "_device", lambda device=None: dev)
+    return server, dev
+
+
+def test_status_served_from_cache_without_ble(monkeypatch):
+    """The 2nd status read is served from cache — no new BLE round-trip."""
+    server, dev = _use_cache_dev(monkeypatch)
+    a = asyncio.run(server.status())
+    assert a["cached"] is False and dev.status_calls == 1
+    b = asyncio.run(server.status())
+    assert b["cached"] is True and dev.status_calls == 1      # cache hit, no extra BLE
+    assert b["is_watering"] is False and "age_sec" in b
+
+
+def test_status_fresh_forces_ble(monkeypatch):
+    """?fresh=1 bypasses the cache and does a live read."""
+    server, dev = _use_cache_dev(monkeypatch)
+    asyncio.run(server.status())                              # calls == 1 (cached)
+    asyncio.run(server.status(fresh=True))                    # forces a live read
+    assert dev.status_calls == 2
+
+
+def test_control_op_refreshes_status_cache(monkeypatch):
+    """A start/stop populates the cache, so the next status is instant + reflects the change."""
+    import server
+    server_, dev = _use_cache_dev(monkeypatch)
+    asyncio.run(server_.start(1, server_.StartBody(minutes=1)))
+    st = asyncio.run(server_.status())
+    assert st["cached"] is True and st["is_watering"] is True and dev.status_calls == 0
+
+
 def test_api_status_selects_device(monkeypatch):
     """A ?device= selection is forwarded to from_config for the BLE call."""
     import server
