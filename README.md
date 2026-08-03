@@ -154,6 +154,45 @@ Linux box, not your laptop. The repo ships a small, robust deployment setup:
 One-time box setup (the release layout, the systemd unit, and a scoped `sudoers` line for
 password-less restart) is documented in **`deploy/README.md`**.
 
+## Home Assistant (MQTT)
+
+Expose each timer to Home Assistant as native entities — **a switch per valve**, a **Watering**
+binary_sensor, **Seconds-remaining** / **Active-zone** sensors, and a global **Automatic-schedule**
+switch — via **MQTT Discovery**. The server stays the sole BLE owner; **HA never touches Bluetooth**.
+
+**Prerequisite:** an MQTT broker on your LAN (e.g. Home Assistant's **Mosquitto** add-on), with HA's
+MQTT integration pointed at it.
+
+**Enable it** — add an opt-in `mqtt` block to `config.json` (omit it and the bridge never starts):
+
+```json
+{
+  "devices": [ "…your timers…" ],
+  "mqtt": {
+    "host": "192.168.2.50",
+    "port": 1883,
+    "username": "bhyve",
+    "password": "…",
+    "base_topic": "bhyve",
+    "discovery_prefix": "homeassistant",
+    "default_minutes": 5
+  }
+}
+```
+
+Redeploy/restart the server (`./deploy/deploy.sh`). Within a few seconds HA auto-creates one **device
+per timer** with the entities above. Toggling a valve switch **starts it for `default_minutes` / stops
+it**; the **Automatic** switch turns host scheduling on/off. State is **confirmed by the device's
+read-back**, so entities reflect reality — a failed command leaves the last real state showing. The
+bridge publishes an MQTT **LWT**, so HA marks the device *unavailable* if the server goes down.
+
+> **Security:** keep the broker on your **trusted LAN** — same posture as the server (see below); a
+> broker reachable from the internet would expose valve control.
+
+**No broker?** A quick stopgap is HA's built-in RESTful / `command_line` integrations pointed at the
+REST API (`/api/status`, `/api/zones/{z}/start|stop`) in HA YAML — clunky (polling, no auto-discovery)
+but works today.
+
 ## Security & scope
 
 **LAN-only, no login.** The server has **no authentication**, and it binds all interfaces

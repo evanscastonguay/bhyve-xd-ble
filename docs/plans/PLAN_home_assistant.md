@@ -61,14 +61,18 @@ server."
 discovery_prefix}`. No block → MQTT disabled.
 
 ## Phases (each testable, hardware-free)
-- **P0 — this scope + entity model decision.**
-- **P1 — publish:** MQTT client (`aiomqtt`/`paho`) started in the server lifespan (opt-in via config);
-  publish Discovery configs + LWT availability + current status. TDD against a **fake broker**.
-- **P2 — control:** subscribe command topics; ON/OFF/stop → existing control under `_ble_lock`;
-  publish confirmed state. Test: a command invokes control and republishes the new state.
-- **P3 — sensors + schedule:** battery / watering / active-zone / seconds-remaining sensors, the
-  **Automatic** switch, and next/last-run; hook scheduler fires to publish. (Evaluate `valve` platform.)
-- **P4 — docs + ship:** HA setup (broker, discovery), `deploy.sh` rollout; document the **C** stopgap.
+- **P0 — this scope + entity model decision.** ✅ DONE
+- **P1 — publish:** ✅ DONE — `mqtt_bridge.py` (lazy `aiomqtt`) started in the lifespan (opt-in);
+  Discovery + LWT availability + confirmed state via `_run`. TDD against a fake broker.
+- **P2 — control:** ✅ DONE — wildcard command subscription → `_mqtt_command` → start/stop under
+  `_ble_lock`; republishes confirmed state.
+- **P3 — sensors + schedule:** ✅ DONE — watering / active-zone / seconds-remaining sensors + the
+  global **Automatic** switch (toggles `host_scheduling`), seeded at startup. (Battery not in
+  `to_dict`, skipped; next/last-run sensors deferred.)
+- **P4 — docs + ship:** ✅ DONE (docs) — README "Home Assistant (MQTT)" section (broker prereq,
+  `mqtt` config block, entities, LWT, security) + the **C** stopgap. **⏳ Live verification in real
+  HA pending an MQTT broker** (deploy the box's `config.json` `mqtt` block + `deploy.sh`, confirm
+  entities appear and toggle valves). `default_minutes` added for the valve ON duration.
 - **(Future) B** — native HACS BLE integration, only if retiring the standalone server.
 
 ## Risks & mitigations
