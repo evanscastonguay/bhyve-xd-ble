@@ -43,7 +43,8 @@ async def _lifespan(app):
         mqtt_stop = asyncio.Event()
         devs = [{"index": i, "name": d.get("name"), "stations": int(d.get("stations", 4))}
                 for i, d in enumerate(_config_devices())]
-        mqtt_task = asyncio.create_task(mqtt_bridge.run_bridge(mcfg, devs, app.version, mqtt_stop))
+        mqtt_task = asyncio.create_task(
+            mqtt_bridge.run_bridge(mcfg, devs, app.version, mqtt_stop, on_command=_mqtt_command))
     try:
         yield
     finally:
@@ -128,6 +129,23 @@ def _device_index(device=None) -> int:
             if x.get("name") == d:
                 return i
     return 0
+
+
+async def _mqtt_command(idx: int, zone: int, on: bool):
+    """HA switch toggle -> start/stop through the shared BLE lock. Confirmed state re-publishes via
+    _run's cache hook. A failed command is swallowed, so HA just keeps showing the last real state."""
+    cfg = _mqtt_config() or {}
+    try:
+        mins = float(cfg.get("default_minutes", 5))
+    except (TypeError, ValueError):
+        mins = 5.0
+    try:
+        if on:
+            await _run(lambda d: d.start(zone, int(mins * 60)), str(idx))
+        else:
+            await _run(lambda d: d.stop(zone), str(idx))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def _run(coro_fn, device=None):
