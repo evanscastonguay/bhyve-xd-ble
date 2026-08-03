@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 import onboarding
 import mqtt_bridge
+import update_check
 from bhyve_xd import BHyveXD
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +38,11 @@ INDEX = os.path.join(HERE, "index.html")
 @asynccontextmanager
 async def _lifespan(app):
     task = asyncio.create_task(_scheduler_loop())   # host-driven schedule engine
+    if _update_check_enabled():                     # opt-in: ask GitHub for the latest version once
+        async def _chk():
+            global _update_info
+            _update_info = await update_check.check(app.version)
+        asyncio.create_task(_chk())
     mqtt_task = mqtt_stop = None
     mcfg = _mqtt_config()                            # opt-in Home Assistant MQTT bridge
     if mcfg:
@@ -68,6 +74,7 @@ _ble_lock = asyncio.Lock()   # the radio does one thing at a time
 STATUS_TTL = 20.0                # seconds; older than this -> serve cached AND refresh in background
 _status_cache: dict = {}         # address -> {"data": <status dict>, "ts": monotonic}
 _status_refreshing: set = set()  # addresses with an in-flight background refresh
+_update_info: dict = {}          # {latest, update_available} from the opt-in update check (see update_check.py)
 _job = None                  # the single in-flight onboarding job (or None)
 _account_session = None       # in-memory only: {email, key, devices}. NEVER persisted;
                               # the persisted account (email+key) lives in config.json.
@@ -118,6 +125,14 @@ def _mqtt_config():
         return onboarding._load_config(CONFIG).get("mqtt") or None
     except Exception:  # noqa: BLE001
         return None
+
+
+def _update_check_enabled() -> bool:
+    """Opt-in top-level `update_check` flag in config.json (default False -> no network at all)."""
+    try:
+        return bool(onboarding._load_config(CONFIG).get("update_check"))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _device_index(device=None) -> int:
@@ -431,8 +446,9 @@ def _read_version():
 @app.get("/api/version")
 async def version():
     """Report the running build (deploy stamps a VERSION file). The deploy health-check polls this
-    to confirm the box switched to the new release before declaring success."""
-    return _read_version()
+    to confirm the box switched to the new release before declaring success. If the opt-in update
+    check ran, `latest` / `update_available` are included too."""
+    return {**_read_version(), **_update_info}
 
 
 @app.get("/api/devices")

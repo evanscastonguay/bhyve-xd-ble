@@ -244,6 +244,11 @@ port-forward it or expose it to the internet.** To restrict it to the machine it
 `--host 127.0.0.1`. Treat the **network key** in `config.json` like a password: it controls **every**
 timer on your Orbit account.
 
+**No telemetry.** The server phones home to nothing by default. Setting `"update_check": true` in
+`config.json` (opt-in) enables a single startup check to GitHub for a newer version — shown in
+`GET /api/version` — which sends **no data about you or your device**; leave it out and there's zero
+outbound traffic beyond talking to your timer (and your MQTT broker, if configured).
+
 **What it deliberately does _not_ do:**
 - **No remote control from outside your home** — local BLE + LAN only, no cloud relay.
 - **No scheduling while the host is off** — automatic runs need the server up and in range (hence the
