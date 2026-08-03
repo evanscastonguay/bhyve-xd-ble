@@ -178,6 +178,24 @@ Linux box, not your laptop. The repo ships a small, robust deployment setup:
 One-time box setup (the release layout, the systemd unit, and a scoped `sudoers` line for
 password-less restart) is documented in **`deploy/README.md`**.
 
+## Install with Docker or the Home Assistant add-on
+
+**Docker** (BLE needs the host's Bluetooth, so share the network + system D-Bus):
+
+```bash
+docker run -d --name bhyve --net=host \
+  -v /var/run/dbus:/var/run/dbus:ro \
+  -v "$PWD/config.json:/data/config.json" \
+  ghcr.io/evanscastonguay/bhyve-xd-ble:latest
+# then open http://<host>:8000/
+```
+
+**Home Assistant add-on** (Supervisor / HA-OS) — *beta*: **Settings → Add-ons → Add-on Store → ⋮ →
+Repositories**, add `https://github.com/evanscastonguay/bhyve-xd-ble`, install **B-Hyve XD (local
+BLE)**, fill in the options (timer MAC + network key + your MQTT broker), and Start. It runs beside HA
+and mirrors the timer over MQTT — see `bhyve-addon/DOCS.md`. (The GHCR image must be public for the
+Supervisor to pull it.)
+
 ## Home Assistant (MQTT)
 
 Expose each timer to Home Assistant as native entities — **a switch per valve**, a **Watering**
