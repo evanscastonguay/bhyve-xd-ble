@@ -5,3 +5,4 @@ aiohttp>=3.9              # cloud login only (onboarding.py); not needed for BLE
 fastapi>=0.110
 uvicorn>=0.29
 pydantic>=2.0
+aiomqtt>=2.0            # optional: Home Assistant MQTT bridge (lazy-imported)
