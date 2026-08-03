@@ -398,8 +398,9 @@ real network keys, credentials, or captured personal data** (only synthetic test
 
 "Orbit" and "B-Hyve" are trademarks of their respective owner, used here **nominatively** only to
 describe compatibility. Published for **personal, non-commercial interoperability** with hardware you
-own, with no warranty. You are responsible for complying with the laws and any agreements that apply
-to you; nothing here is legal advice.
+own, with no warranty. **Use at your own risk:** this software actuates **physical water valves** —
+you are solely responsible for your own hardware, water use, and any resulting property/plant damage,
+and for complying with the laws and any agreements that apply to you. Nothing here is legal advice.
 
 **Good faith:** if you represent Orbit and have any concerns, please **open an issue** — I'll respond
 promptly and address them in good faith.

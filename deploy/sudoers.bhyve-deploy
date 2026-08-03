@@ -7,4 +7,5 @@
 #     && sudo install -o root -g root -m 0440 ~/sudoers.bhyve-deploy /etc/sudoers.d/bhyve-deploy'
 #
 # Scope is deliberately narrow: only these four systemctl verbs on bhyve.service.
-evans ALL=(root) NOPASSWD: /usr/bin/systemctl restart bhyve.service, /usr/bin/systemctl start bhyve.service, /usr/bin/systemctl stop bhyve.service, /usr/bin/systemctl status bhyve.service
+# Replace `pi` with the user your deploys log in as (the box's SSH user).
+pi ALL=(root) NOPASSWD: /usr/bin/systemctl restart bhyve.service, /usr/bin/systemctl start bhyve.service, /usr/bin/systemctl stop bhyve.service, /usr/bin/systemctl status bhyve.service
