@@ -342,3 +342,19 @@ Protocol reverse-engineered with reference to the community projects
 `wxfield/Orbit_B-Hyve_4Port_Controller`, `troxor/bhyve_ble`, and `ljmerza/orbit-bhyve-ble`. The
 **full-arming-sequence** requirement and the two-way read-back confirmation were established here on
 live HT34A hardware.
+
+## License & provenance
+
+Licensed under the **MIT License** — see [`LICENSE`](LICENSE).
+
+This is an **independent, unofficial** project — **not affiliated with, authorized, or endorsed by
+Orbit Irrigation Products.** The BLE protocol was reverse-engineered **clean-room**: by observing
+Bluetooth traffic to and from **hardware the authors own**, using the authors' **own account network
+key** (or a self-generated key in `--self-key` mode). **No Orbit source code, firmware, or
+confidential material was used, decompiled, or is included here**, and the repository contains **no
+real network keys, credentials, or captured personal data** (only synthetic test vectors).
+
+"Orbit" and "B-Hyve" are trademarks of their respective owner, used here **nominatively** only to
+describe compatibility. This project is provided for **interoperability and personal use with
+hardware you own**, with no warranty. You are responsible for complying with the laws and any
+agreements that apply to you; nothing here is legal advice.
