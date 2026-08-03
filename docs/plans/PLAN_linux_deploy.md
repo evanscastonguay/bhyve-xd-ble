@@ -17,7 +17,7 @@ working `hci0` Bluetooth (BlueZ 5.72). See [[linux-control-box]].
   **securely** (scp over the SSH key we set up) or the timer re-adopted on the box; never
   committed. **Do not type any password** (key auth only).
 - **BLE preconditions on Linux:** the box must be **physically near the timer**, the **phone's
-  Bluetooth off** (single BLE link), and `evans` must be able to talk to BlueZ (usually fine as a
+  Bluetooth off** (single BLE link), and `pi` must be able to talk to BlueZ (usually fine as a
   normal user; may need the `bluetooth` group / adapter powered — `hci0` is UP).
 - **Avoid double-scheduling:** once Linux runs scheduling, **disable it on the Mac** (or stop the
   Mac server) so a rule doesn't fire twice.
@@ -97,7 +97,7 @@ So the box clones only product-relevant files. Verified by usage analysis (impor
 
 ### P4 — systemd service
 - Unit `bhyve.service`: `ExecStart=…/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000`,
-  `Restart=on-failure`, `WorkingDirectory` the repo, `User=evans`, `After=bluetooth.target`.
+  `Restart=on-failure`, `WorkingDirectory` the repo, `User=pi`, `After=bluetooth.target`.
   `systemctl --user` or system unit (system unit needs sudo — user performs the privileged step).
 - Enable on boot; verify it serves `http://192.168.1.50:8000/`, and **survives a reboot**.
 - **Proves:** always-on; no terminal needed.
@@ -116,7 +116,7 @@ So the box clones only product-relevant files. Verified by usage analysis (impor
 |---|---|
 | macOS UUID address in config won't connect on Linux | Linux config uses `address = MAC` (proven by old linux config) |
 | Secret key transfer | scp over the existing SSH key, chmod 600; never commit; or re-adopt on-box |
-| BlueZ perms / adapter | run as `evans`; add to `bluetooth` group if needed; `hci0` already UP |
+| BlueZ perms / adapter | run as `pi`; add to `bluetooth` group if needed; `hci0` already UP |
 | Box not in BLE range of the timer | position the box near the timer; P2 status read is the gate |
 | Double-firing (Mac + Linux both scheduling) | turn Mac scheduling off once Linux is authoritative |
 | systemd needs sudo | the user runs the one privileged install step; I prep the unit file |

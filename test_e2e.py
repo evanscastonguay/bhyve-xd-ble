@@ -2131,7 +2131,7 @@ def test_schedule_write_unknown_mac_raises(tmp_path):
     import schedule as S
     p = _cfg_with_timer(tmp_path)
     with _pt.raises(S.ScheduleError):
-        S.write_schedules(p, "AA:BB:CC:DD:EE:FF", [{"valve": 1, "start": "06:00", "days": [0], "minutes": 5}])
+        S.write_schedules(p, "12:34:56:78:9A:BC", [{"valve": 1, "start": "06:00", "days": [0], "minutes": 5}])
 
 
 # --- P2: schedule REST (GET/PUT per timer; validate; key never in a response) ---

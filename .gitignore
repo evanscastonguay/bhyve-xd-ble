@@ -5,3 +5,4 @@ __pycache__/
 *.pklg
 *.log
 secrets/
+deploy/local.env
