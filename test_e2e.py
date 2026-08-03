@@ -606,25 +606,62 @@ def test_mqtt_parse_command_topic():
     assert mb.parse_command_topic("bhyve", "bhyve/x/valve/2/set") is None    # non-numeric idx
 
 
+def test_mqtt_parse_command_valve_and_automatic():
+    import mqtt_bridge as mb
+    assert mb.parse_command("bhyve", "bhyve/0/valve/2/set") == ("valve", 0, 2)
+    assert mb.parse_command("bhyve", "bhyve/1/automatic/set") == ("automatic", 1, None)
+    assert mb.parse_command("bhyve", "bhyve/0/state") is None
+
+
 def test_mqtt_dispatch_command_invokes_handler():
     import mqtt_bridge as mb
     calls = []
-    async def on_command(idx, zone, on): calls.append((idx, zone, on))
+    async def on_command(kind, idx, zone, on): calls.append((kind, idx, zone, on))
     assert asyncio.run(mb.dispatch_command("bhyve", "bhyve/1/valve/3/set", "ON", on_command)) is True
-    asyncio.run(mb.dispatch_command("bhyve", "bhyve/1/valve/3/set", "OFF", on_command))
-    assert calls == [(1, 3, True), (1, 3, False)]
+    asyncio.run(mb.dispatch_command("bhyve", "bhyve/2/automatic/set", "OFF", on_command))
+    assert calls == [("valve", 1, 3, True), ("automatic", 2, None, False)]
     calls.clear()
     assert asyncio.run(mb.dispatch_command("bhyve", "bhyve/1/state", "ON", on_command)) is False
     assert calls == []                                                       # ignored non-command topic
 
 
+def test_mqtt_state_payload_includes_automatic_when_present():
+    import mqtt_bridge as mb
+    assert mb.state_payload({"is_watering": False, "automatic": True})["automatic"] is True
+    assert "automatic" not in mb.state_payload({"is_watering": False})       # omitted when unknown
+
+
+def test_mqtt_discovery_has_active_zone_sensor_and_automatic_switch():
+    import mqtt_bridge as mb
+    cfgs = mb.discovery_configs(0, "T", 4, "1.3.0")
+    assert any(t.endswith("_active_zone/config") for t, _ in cfgs)
+    ctopic, payload = mb.automatic_config(0, "T", "1.3.0")
+    assert ctopic.endswith("bhyve_0_automatic/config")
+    assert payload["command_topic"] == "bhyve/0/automatic/set"
+    assert "automatic" in payload["value_template"]
+
+
 def test_mqtt_command_drives_control(monkeypatch):
-    """server._mqtt_command routes an HA switch toggle to start/stop through the BLE lock."""
+    """A valve toggle routes to start/stop through the BLE lock."""
     server, dev = _use_cache_dev(monkeypatch)
-    asyncio.run(server._mqtt_command(0, 2, True))
+    asyncio.run(server._mqtt_command("valve", 0, 2, True))
     assert dev._watering is True                                             # ON -> start
-    asyncio.run(server._mqtt_command(0, 2, False))
+    asyncio.run(server._mqtt_command("valve", 0, 2, False))
     assert dev._watering is False                                            # OFF -> stop
+
+
+def test_mqtt_command_automatic_toggles_scheduling(monkeypatch, tmp_path):
+    """An 'automatic' toggle flips host_scheduling in config."""
+    import json
+    import server
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"devices": [{"name": "T", "address": "A", "network_key": TEST_KEY}],
+                               "host_scheduling": False}))
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    asyncio.run(server._mqtt_command("automatic", 0, None, True))
+    assert server._host_scheduling_enabled() is True
+    asyncio.run(server._mqtt_command("automatic", 0, None, False))
+    assert server._host_scheduling_enabled() is False
 
 
 def test_api_status_selects_device(monkeypatch):
