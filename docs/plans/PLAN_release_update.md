@@ -83,7 +83,15 @@ password prompt — verified by a full unattended deploy.
   Install with `sudo visudo -cf` validation to avoid lockout. **Proves:** `deploy.sh` restarts
   **unattended** (no password prompt).
 
-### P3 — Health-check + auto-rollback (the robustness proof) ⛳
+### P3 — Health-check + auto-rollback (the robustness proof) ⛳ ✅ DONE 2026-08-02
+**Result:** `deploy.sh` now records the current release, flips, restarts, then polls `/api/version`
+(SHA match) + `/` (200) for ~30s — **pure signals, no BLE** (a sleeping timer can't cause a false
+rollback). On failure it flips `current` back, restarts, re-verifies, and exits **non-zero** with a
+journal tail. **Proven both directions live:** a healthy deploy passed the check (`6c82063`); a
+deliberately broken build (startup `raise` in `_lifespan` — passes the pytest gate since tests don't
+run lifespan, but crashes uvicorn) was deployed → health-check failed → **auto-rolled-back to
+`6c82063`, box healthy, exit code 1**. A bad release can no longer take down the controller.
+
 - After restart, poll for up to ~30 s until `/api/version.git_sha == $id`'s sha **and**
   `/api/status` returns 200 with a decoded clock. On failure: **flip `current` back to the previous
   release, restart, re-verify**, and exit non-zero with the captured journal tail.
