@@ -259,7 +259,7 @@ and **self-key** (`provision --self-key` — our own generated key, no Orbit acc
 - **`device disappeared` / `not found` / connect timeout** — the timer is asleep. **Press a button on
   it** to wake it, then retry. Also confirm your **phone's Bluetooth is off** (it may be holding the
   timer's single BLE connection).
-- **Wrong `address`** — on **Linux** it's the **MAC** (`44:67:55:…`); on **macOS** it's a
+- **Wrong `address`** — on **Linux** it's the **MAC** (`AA:BB:CC:…`); on **macOS** it's a
   **CoreBluetooth UUID**. Run `python cli.py scan` to find it.
 - **Nothing runs on schedule** — set the Schedule tab to **Automatic**, and keep the server up and in
   range (see **Run it 24/7 (Linux)**).

@@ -67,7 +67,7 @@ Non-destructive experiment on a working timer (same device, same connection):
 | Key used | Connect + handshake | Reply decodes? | `device_mac` | `device_time` |
 |---|---|---|---|---|
 | **wrong** (`ffff…`) | ✅ yes | ❌ no (empty) | `None` | `None` |
-| **real** (`…3322`) | ✅ yes | ✅ yes | `44:67:55:…` | populated |
+| **real** (`…xxxx`) | ✅ yes | ✅ yes | `AA:BB:CC:…` | populated |
 
 **Implication:** the connection layer never tells you the key is wrong. A wrong key, a
 device that doesn't hold the key, and a genuinely locked device all present identically:
