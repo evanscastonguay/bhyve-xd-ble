@@ -28,10 +28,17 @@ Honest caveats are in [Status & caveats](#status--caveats).
 
 ## Quick start
 
-**Requirements:** Python **3.10+**; on Linux, a working BlueZ stack (`bluetoothd` running); an Orbit
-account (to fetch the BLE key — or use `--self-key`, below); and a supported timer (HT34 4-station is
-what's verified). The timer is battery BLE and only advertises briefly, so **press a button on it**
-to wake it right before a first command.
+**Before you begin — you need all of:**
+- ☐ An Orbit **B-Hyve XD** hose timer (HT34 **4-station** is what's verified).
+- ☐ The host (Mac / Raspberry Pi / Linux box) **within Bluetooth range (~10 m)** of the timer.
+- ☐ An **Orbit account** — to fetch the BLE key (`register`) — **or** a factory-fresh timer to key it
+  yourself (`provision --self-key`).
+- ☐ Your **phone's Bluetooth OFF** — the timer accepts only one BLE connection, so the app/phone must
+  not be holding it.
+- ☐ **Python 3.10+**; on Linux, a running **BlueZ** stack (`bluetoothd`).
+
+The timer is battery BLE and only advertises briefly, so **press a button on it** to wake it right
+before a first command.
 
 ```bash
 python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
@@ -51,6 +58,10 @@ key, finds the timer, and writes `config.json`:
 ./venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000
 # open http://<this-host>:8000/  →  ＋ Add timer (same onboarding flow), then control + schedule
 ```
+
+> **Security:** the server has **no login**, and `--host 0.0.0.0` exposes it to your whole network.
+> Run it only on a trusted LAN — see [Security & scope](#security--scope). To keep it to this machine
+> only, use `--host 127.0.0.1`.
 
 **Already have a `config.json`** (address + network key)? Skip registration — `cli.py status` or the
 server just work. See [The network key](#the-network-key) for what goes in it.
@@ -140,7 +151,28 @@ Linux box, not your laptop. The repo ships a small, robust deployment setup:
 One-time box setup (the release layout, the systemd unit, and a scoped `sudoers` line for
 password-less restart) is documented in **`deploy/README.md`**.
 
+## Security & scope
+
+**LAN-only, no login.** The server has **no authentication**, and it binds all interfaces
+(`--host 0.0.0.0`), so anything on your network can reach `http://<host>:8000` and **control your
+valves** (and hit the onboarding/login endpoints). Run it **only on a trusted home network — do not
+port-forward it or expose it to the internet.** To restrict it to the machine itself, bind
+`--host 127.0.0.1`. Treat the **network key** in `config.json` like a password: it controls **every**
+timer on your Orbit account.
+
+**What it deliberately does _not_ do:**
+- **No remote control from outside your home** — local BLE + LAN only, no cloud relay.
+- **No scheduling while the host is off** — automatic runs need the server up and in range (hence the
+  always-on box).
+- **No web-UI accounts / multi-user** — anyone who can open the page has full control.
+- **Only HT34 4-station is verified**; other B-Hyve models are untested, and **MFA Orbit accounts are
+  not supported**.
+- **No on-device standalone schedules** (see [Scheduling](#scheduling)).
+
 ## Add a timer
+
+**Which one?** Already using the timer in the Orbit app → **`register`** (below). Brand-new or
+factory-reset with no app → **`provision`** (further down).
 
 ### From your Orbit account (`register`)
 
@@ -179,6 +211,18 @@ Two key modes: **Orbit** (`provision` — the account key; the Orbit app and our
 and **self-key** (`provision --self-key` — our own generated key, no Orbit account; stashed in
 `secrets/`, and the Orbit app can no longer control the device). Both are proven durable
 (see [Status & caveats](#status--caveats)). Mechanism: `docs/SPIKE_provisioning.md`.
+
+## Troubleshooting
+
+- **`device disappeared` / `not found` / connect timeout** — the timer is asleep. **Press a button on
+  it** to wake it, then retry. Also confirm your **phone's Bluetooth is off** (it may be holding the
+  timer's single BLE connection).
+- **Wrong `address`** — on **Linux** it's the **MAC** (`44:67:55:…`); on **macOS** it's a
+  **CoreBluetooth UUID**. Run `python cli.py scan` to find it.
+- **Nothing runs on schedule** — set the Schedule tab to **Automatic**, and keep the server up and in
+  range (see **Run it 24/7 (Linux)**).
+- **First status read is slow (~10 s)** — that's the one live BLE round-trip; it's cached afterward,
+  so the page stays instant.
 
 ## How it works
 
