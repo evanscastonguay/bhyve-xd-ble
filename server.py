@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import onboarding
+import mqtt_bridge
 from bhyve_xd import BHyveXD
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,10 +37,24 @@ INDEX = os.path.join(HERE, "index.html")
 @asynccontextmanager
 async def _lifespan(app):
     task = asyncio.create_task(_scheduler_loop())   # host-driven schedule engine
+    mqtt_task = mqtt_stop = None
+    mcfg = _mqtt_config()                            # opt-in Home Assistant MQTT bridge
+    if mcfg:
+        mqtt_stop = asyncio.Event()
+        devs = [{"index": i, "name": d.get("name"), "stations": int(d.get("stations", 4))}
+                for i, d in enumerate(_config_devices())]
+        mqtt_task = asyncio.create_task(mqtt_bridge.run_bridge(mcfg, devs, app.version, mqtt_stop))
     try:
         yield
     finally:
         task.cancel()
+        if mqtt_stop is not None:
+            mqtt_stop.set()
+        if mqtt_task is not None:
+            try:
+                await asyncio.wait_for(mqtt_task, timeout=5)
+            except Exception:  # noqa: BLE001
+                mqtt_task.cancel()
 
 
 app = FastAPI(title="B-Hyve XD Local API", version="1.3.0", lifespan=_lifespan)
@@ -87,6 +102,34 @@ def _device(device=None) -> BHyveXD:
     return BHyveXD.from_config(CONFIG, device=_coerce_device(device))
 
 
+def _config_devices() -> list:
+    try:
+        return onboarding._load_config(CONFIG).get("devices", [])
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _mqtt_config():
+    """The opt-in top-level `mqtt` block from config.json, or None (bridge disabled)."""
+    try:
+        return onboarding._load_config(CONFIG).get("mqtt") or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _device_index(device=None) -> int:
+    """Resolve a ?device= selector to a 0-based config index (for keying MQTT state)."""
+    devs = _config_devices()
+    d = _coerce_device(device)
+    if isinstance(d, int):
+        return d if d >= 0 else len(devs) + d
+    if isinstance(d, str):
+        for i, x in enumerate(devs):
+            if x.get("name") == d:
+                return i
+    return 0
+
+
 async def _run(coro_fn, device=None):
     """Serialize BLE access and translate errors to HTTP. coro_fn takes the
     device and returns a DeviceStatus."""
@@ -99,7 +142,14 @@ async def _run(coro_fn, device=None):
         except Exception as err:  # noqa: BLE001
             raise HTTPException(503, f"BLE error: {err}") from err
     if hasattr(result, "to_dict"):     # cache every fresh status (status / start / stop all return one)
-        _status_cache[dev.address] = {"data": result.to_dict(), "ts": time.monotonic()}
+        data = result.to_dict()
+        _status_cache[dev.address] = {"data": data, "ts": time.monotonic()}
+        br = mqtt_bridge.active()       # mirror confirmed state to Home Assistant, if the bridge is up
+        if br is not None:
+            try:
+                await br.publish_state(_device_index(device), data)
+            except Exception:          # noqa: BLE001 — MQTT must never break control
+                pass
     return result
 
 

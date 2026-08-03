@@ -545,6 +545,59 @@ def test_control_op_refreshes_status_cache(monkeypatch):
     assert st["cached"] is True and st["is_watering"] is True and dev.status_calls == 0
 
 
+def test_mqtt_topics():
+    import mqtt_bridge as mb
+    t = mb.topics("bhyve", 0)
+    assert t["state"] == "bhyve/0/state"
+    assert t["availability"] == "bhyve/availability"
+
+
+def test_mqtt_discovery_configs_shape():
+    import mqtt_bridge as mb
+    cfgs = mb.discovery_configs(0, "New Timer", 4, "1.3.0", base="bhyve", prefix="homeassistant")
+    ctopics = [t for t, _ in cfgs]
+    assert sum("/switch/" in t for t in ctopics) == 4          # one per valve
+    assert any("/binary_sensor/" in t for t in ctopics)        # watering
+    assert any("/sensor/" in t for t in ctopics)               # seconds remaining
+    for _, p in cfgs:                                          # every entity is wired to the device + availability
+        assert p["state_topic"] == "bhyve/0/state"
+        assert p["unique_id"].startswith("bhyve_0_")
+        assert p["device"]["identifiers"] == ["bhyve_0"]
+        assert p["availability"][0]["topic"] == "bhyve/availability"
+    sw1 = next(p for t, p in cfgs if t.endswith("bhyve_0_valve1/config"))
+    assert "active_zone" in sw1["value_template"] and "1" in sw1["value_template"]
+    assert sw1["command_topic"] == "bhyve/0/valve/1/set"       # (handled in P2)
+
+
+def test_mqtt_state_payload_selects_fields():
+    import mqtt_bridge as mb
+    st = {"is_watering": True, "active_zone": 2, "seconds_remaining": 60,
+          "run_state": 4, "clock": "x", "device_time": 0}
+    assert mb.state_payload(st) == {"is_watering": True, "active_zone": 2, "seconds_remaining": 60}
+
+
+class _FakeMqtt:
+    def __init__(self): self.msgs = []
+    async def publish(self, topic, payload, retain=False, qos=0):
+        self.msgs.append((topic, payload, retain))
+
+
+def test_mqtt_bridge_publishes_discovery_state_availability():
+    import json
+    import mqtt_bridge as mb
+    c = _FakeMqtt()
+    br = mb.MqttBridge(c, base="bhyve", prefix="homeassistant")
+    asyncio.run(br.publish_discovery([{"index": 0, "name": "New Timer", "stations": 4}], version="1.3.0"))
+    assert c.msgs and all(retain for _, _, retain in c.msgs)                 # discovery configs are retained
+    assert any("/switch/bhyve_0_valve1/config" in t for t, _, _ in c.msgs)
+    c.msgs.clear()
+    asyncio.run(br.publish_state(0, {"is_watering": True, "active_zone": 1, "seconds_remaining": 60}))
+    t, payload, retain = c.msgs[0]
+    assert t == "bhyve/0/state" and retain and json.loads(payload)["active_zone"] == 1
+    asyncio.run(br.publish_availability(True))
+    assert ("bhyve/availability", "online", True) in c.msgs
+
+
 def test_api_status_selects_device(monkeypatch):
     """A ?device= selection is forwarded to from_config for the BLE call."""
     import server
