@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -43,6 +44,12 @@ async def _lifespan(app):
 
 app = FastAPI(title="B-Hyve XD Local API", version="1.3.0", lifespan=_lifespan)
 _ble_lock = asyncio.Lock()   # the radio does one thing at a time
+# Last-known status per device address, so GET /api/status answers instantly instead of paying a
+# fresh BLE connect every time. Every BLE op (_run) refreshes it; a stale read triggers a
+# background refresh. See _run / status().
+STATUS_TTL = 20.0                # seconds; older than this -> serve cached AND refresh in background
+_status_cache: dict = {}         # address -> {"data": <status dict>, "ts": monotonic}
+_status_refreshing: set = set()  # addresses with an in-flight background refresh
 _job = None                  # the single in-flight onboarding job (or None)
 _account_session = None       # in-memory only: {email, key, devices}. NEVER persisted;
                               # the persisted account (email+key) lives in config.json.
@@ -88,9 +95,12 @@ async def _run(coro_fn, device=None):
     dev = _device(device)
     async with _ble_lock:
         try:
-            return await coro_fn(dev)
+            result = await coro_fn(dev)
         except Exception as err:  # noqa: BLE001
             raise HTTPException(503, f"BLE error: {err}") from err
+    if hasattr(result, "to_dict"):     # cache every fresh status (status / start / stop all return one)
+        _status_cache[dev.address] = {"data": result.to_dict(), "ts": time.monotonic()}
+    return result
 
 
 class StartBody(BaseModel):
@@ -610,10 +620,36 @@ async def health(device: str | None = None):
     return {"ok": True, "name": d.name, "address": d.address, "stations": d.stations}
 
 
+def _kick_refresh(device, address):
+    """Refresh a stale cache entry in the background — best-effort; on error keep the stale value."""
+    if address in _status_refreshing:
+        return
+    _status_refreshing.add(address)
+    async def _refresh():
+        try:
+            await _run(lambda d: d.status(), device)   # _run repopulates the cache on success
+        except Exception:                              # noqa: BLE001 — asleep/out of range; keep stale
+            pass
+        finally:
+            _status_refreshing.discard(address)
+    asyncio.create_task(_refresh())
+
+
 @app.get("/api/status")
-async def status(device: str | None = None):
-    st = await _run(lambda d: d.status(), device)
-    return st.to_dict()
+async def status(device: str | None = None, fresh: bool = False):
+    """Serve the last-known status instantly from cache; do a live BLE read only when the cache is
+    empty or fresh=1. A cached-but-stale hit is returned immediately and refreshed in the background
+    (the client re-polls once to pick up the fresh value)."""
+    dev = _device(device)
+    entry = None if fresh else _status_cache.get(dev.address)
+    if entry is not None:
+        age = time.monotonic() - entry["ts"]
+        stale = age > STATUS_TTL
+        if stale:
+            _kick_refresh(device, dev.address)
+        return {**entry["data"], "cached": True, "age_sec": round(age, 1), "stale": stale}
+    st = await _run(lambda d: d.status(), device)      # cold cache or forced fresh -> live read
+    return {**st.to_dict(), "cached": False, "age_sec": 0.0, "stale": False}
 
 
 @app.post("/api/zones/{zone}/start")
