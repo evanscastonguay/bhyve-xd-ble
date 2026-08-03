@@ -99,17 +99,17 @@ run lifespan, but crashes uvicorn) was deployed → health-check failed → **au
   script detects the failed health-check → **auto-reverts** to the last good release → service still
   serving the previous good version. **Proves:** a bad release cannot take down watering.
 
-### P4 — Prune + idempotency + `make release`
-- Keep last **5** releases (prune older, never the `current` target); re-running with no code change
-  is safe/clean (new id, same result); `make release` = `git tag` (optional) + `deploy.sh`; `make
-  rollback` = flip to previous + restart + health-check.
-- **Gate:** 6 deploys → 5 dirs retained + oldest pruned; `make rollback` returns to the prior SHA and
-  health-checks green. **Proves:** steady-state ergonomics + housekeeping.
+### P4 — Prune + idempotency + `make release` ✅ DONE 2026-08-03
+- Keep last **5** releases (prune older, never the `current` target); `make deploy`/`release`/
+  `rollback`/`test`/`run`; `make rollback` = flip to previous + restart + health-check.
+- **Result (verified live):** a deploy pruned the box **7 → 5** releases (current preserved);
+  `rollback.sh` flipped `08b62eb → 7ca1b68`, health-checked green (root 200), then a redeploy
+  restored the latest. Re-running deploy is safe (new id, same outcome).
 
-### P5 — Docs + tracked `deploy/`
-- Commit `deploy/deploy.sh`, `deploy/bhyve.service` (template), `deploy/sudoers.bhyve-deploy`,
-  `deploy/README.md` (one-time setup + daily use). Add a README "Updating the Linux deployment"
-  section. Mark this plan done; cross-link `PLAN_linux_deploy.md`.
+### P5 — Docs + tracked `deploy/` ✅ DONE 2026-08-03
+- Committed `deploy/deploy.sh`, `deploy/rollback.sh`, `deploy/bhyve.service` (template),
+  `deploy/sudoers.bhyve-deploy`, `deploy/README.md` (files list + one-time setup + daily use), plus a
+  `Makefile` and the README **Run it 24/7 (Linux)** section. Cross-links `PLAN_linux_deploy.md`.
 
 ## Risks & mitigations
 - **Restart drops BLE mid-watering** → deploys are manual/rare; health-check guarantees recovery;
