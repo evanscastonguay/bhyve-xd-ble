@@ -11,6 +11,9 @@ the device reports `watering, 300s remaining` after a start and `idle` after a s
 
 > ⚠️ Unofficial and reverse-engineered; not affiliated with Orbit. **Don't update the timer's
 > firmware** — the protocol was reverse-engineered against fw 0107 and an update may change it.
+>
+> A good-faith **interoperability** tool for controlling a B-Hyve timer **you own**, locally — not a
+> means to bypass Orbit's services or cloud.
 
 ## What works
 
@@ -355,6 +358,9 @@ confidential material was used, decompiled, or is included here**, and the repos
 real network keys, credentials, or captured personal data** (only synthetic test vectors).
 
 "Orbit" and "B-Hyve" are trademarks of their respective owner, used here **nominatively** only to
-describe compatibility. This project is provided for **interoperability and personal use with
-hardware you own**, with no warranty. You are responsible for complying with the laws and any
-agreements that apply to you; nothing here is legal advice.
+describe compatibility. Published for **personal, non-commercial interoperability** with hardware you
+own, with no warranty. You are responsible for complying with the laws and any agreements that apply
+to you; nothing here is legal advice.
+
+**Good faith:** if you represent Orbit and have any concerns, please **open an issue** — I'll respond
+promptly and address them in good faith.
