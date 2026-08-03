@@ -598,6 +598,35 @@ def test_mqtt_bridge_publishes_discovery_state_availability():
     assert ("bhyve/availability", "online", True) in c.msgs
 
 
+def test_mqtt_parse_command_topic():
+    import mqtt_bridge as mb
+    assert mb.parse_command_topic("bhyve", "bhyve/0/valve/2/set") == (0, 2)
+    assert mb.parse_command_topic("bhyve", "bhyve/12/valve/4/set") == (12, 4)
+    assert mb.parse_command_topic("bhyve", "bhyve/0/state") is None          # not a command
+    assert mb.parse_command_topic("bhyve", "bhyve/x/valve/2/set") is None    # non-numeric idx
+
+
+def test_mqtt_dispatch_command_invokes_handler():
+    import mqtt_bridge as mb
+    calls = []
+    async def on_command(idx, zone, on): calls.append((idx, zone, on))
+    assert asyncio.run(mb.dispatch_command("bhyve", "bhyve/1/valve/3/set", "ON", on_command)) is True
+    asyncio.run(mb.dispatch_command("bhyve", "bhyve/1/valve/3/set", "OFF", on_command))
+    assert calls == [(1, 3, True), (1, 3, False)]
+    calls.clear()
+    assert asyncio.run(mb.dispatch_command("bhyve", "bhyve/1/state", "ON", on_command)) is False
+    assert calls == []                                                       # ignored non-command topic
+
+
+def test_mqtt_command_drives_control(monkeypatch):
+    """server._mqtt_command routes an HA switch toggle to start/stop through the BLE lock."""
+    server, dev = _use_cache_dev(monkeypatch)
+    asyncio.run(server._mqtt_command(0, 2, True))
+    assert dev._watering is True                                             # ON -> start
+    asyncio.run(server._mqtt_command(0, 2, False))
+    assert dev._watering is False                                            # OFF -> stop
+
+
 def test_api_status_selects_device(monkeypatch):
     """A ?device= selection is forwarded to from_config for the BLE call."""
     import server

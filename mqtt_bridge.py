@@ -96,6 +96,36 @@ def state_payload(status: dict) -> dict:
     }
 
 
+# --- commands FROM Home Assistant (parsing is pure + tested; I/O lives in run_bridge) ---------- #
+
+def command_sub(base: str) -> str:
+    """The single wildcard subscription that catches every valve command topic."""
+    return f"{base}/+/valve/+/set"
+
+
+def parse_command_topic(base: str, topic: str):
+    """`{base}/{idx}/valve/{z}/set` -> (idx, zone), else None."""
+    p = topic.split("/")
+    if len(p) == 5 and p[0] == base and p[2] == "valve" and p[4] == "set":
+        try:
+            return int(p[1]), int(p[3])
+        except ValueError:
+            return None
+    return None
+
+
+async def dispatch_command(base: str, topic: str, payload, on_command) -> bool:
+    """Parse a command message and invoke `on_command(idx, zone, on)`. Returns False (no-op) for
+    anything that isn't a valve command. Payload `ON` -> start, anything else -> stop."""
+    parsed = parse_command_topic(base, topic)
+    if parsed is None:
+        return False
+    idx, zone = parsed
+    on = str(payload).strip().upper() == "ON"
+    await on_command(idx, zone, on)
+    return True
+
+
 # --- thin publisher over an async MQTT client (client injected -> testable with a fake) --------- #
 
 class MqttBridge:
@@ -133,11 +163,11 @@ def active() -> MqttBridge | None:
     return _active
 
 
-async def run_bridge(config: dict, devices, version: str, stop: asyncio.Event):
-    """Connect to the broker (with an offline LWT), publish Discovery + online + a first state, then
-    stay connected until `stop` is set. Kept alive for the server's lifetime; publishing of live state
-    is driven by server._run via active().publish_state(). Best-effort: connection errors are logged,
-    never fatal to the server."""
+async def run_bridge(config: dict, devices, version: str, stop: asyncio.Event, on_command=None):
+    """Connect to the broker (with an offline LWT), publish Discovery + online, subscribe to valve
+    commands (if `on_command` given), then stay connected until `stop` is set. Kept alive for the
+    server's lifetime; live state is pushed by server._run via active().publish_state(). Best-effort:
+    connection errors are logged, never fatal to the server."""
     global _active
     try:
         import aiomqtt  # lazy: only needed when MQTT is configured
@@ -157,9 +187,25 @@ async def run_bridge(config: dict, devices, version: str, stop: asyncio.Event):
             await br.publish_availability(True)
             _active = br
             print(f"[mqtt] bridge online -> {config['host']} (base '{base}')")
+            pump = None
+            if on_command is not None:
+                await client.subscribe(command_sub(base))
+
+                async def _pump():
+                    async for m in client.messages:
+                        raw = m.payload
+                        payload = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        try:
+                            await dispatch_command(base, str(m.topic), payload, on_command)
+                        except Exception as err:  # noqa: BLE001 — one bad command must not kill the loop
+                            print(f"[mqtt] command error ({err})")
+
+                pump = asyncio.create_task(_pump())
             try:
                 await stop.wait()
             finally:
+                if pump is not None:
+                    pump.cancel()
                 await br.publish_availability(False)
     except Exception as err:  # noqa: BLE001 — a broken broker must never take down control
         print(f"[mqtt] bridge error ({err}); HA integration off, local control unaffected")
