@@ -23,6 +23,7 @@ REMOTE="${BHYVE_REMOTE:-bhyve-linux}"
 BASE="${BHYVE_BASE:-/home/evans/bhyve}"
 HEALTH_URL="${BHYVE_HEALTH_URL:-http://192.168.2.169:8000}"
 SERVICE="${BHYVE_SERVICE:-bhyve.service}"
+KEEP="${BHYVE_KEEP:-5}"   # how many releases to retain after a successful deploy
 
 cd "$(dirname "$0")/.."   # repo root (this script lives in deploy/)
 
@@ -92,6 +93,19 @@ ssh "$REMOTE" "sudo systemctl restart '$SERVICE'"
 bold "Health check: is $HEALTH_URL serving $SHA?"
 if health_ok "$SHA"; then
   curl -s "$HEALTH_URL/api/version"; echo
+  # prune: keep the newest $KEEP releases, and never the current target
+  ssh "$REMOTE" BASE="$BASE" KEEP="$KEEP" bash -s <<'PRUNE' || true
+set -e
+cd "$BASE/releases" 2>/dev/null || exit 0
+cur=$(basename "$(readlink "$BASE/current")")
+i=0
+for d in $(ls -1dt */ 2>/dev/null | sed 's#/##'); do
+  i=$((i + 1))
+  [ "$i" -le "$KEEP" ] && continue
+  [ "$d" = "$cur" ] && continue
+  rm -rf -- "$d"
+done
+PRUNE
   printf '\033[32m✓ %s is live and healthy at %s\033[0m\n' "$ID" "$HEALTH_URL"
   exit 0
 fi
