@@ -62,24 +62,50 @@ printf '%s\n%s\n' "$SHA" "$(date -u +%FT%TZ)" > VERSION
 ./venv/bin/python -c 'import server'   # smoke: the release imports on its own venv
 FINALIZE
 
-# 5) atomic switch: flip the 'current' symlink (all-or-nothing; relative target under $BASE)
+# Health check: is the box serving the expected SHA AND answering on '/'? Deliberately uses
+# /api/version + '/' (both pure — no BLE), so a sleeping timer never triggers a false rollback;
+# this checks that the *release* booted and serves, not that the physical valve is reachable.
+health_ok(){                                   # $1 = expected short sha
+  local want="$1" out
+  for _ in $(seq 1 15); do                     # up to ~30s
+    sleep 2
+    out="$(curl -fsS --max-time 10 "$HEALTH_URL/api/version" 2>/dev/null || true)"
+    if printf '%s' "$out" | grep -q "\"$want\""; then
+      curl -fsS -o /dev/null --max-time 10 "$HEALTH_URL/" 2>/dev/null && return 0
+    fi
+  done
+  return 1
+}
+
+# 5) record the CURRENT release (our rollback target) before switching
+PREV="$(ssh "$REMOTE" "readlink '$BASE/current' 2>/dev/null || true")"   # e.g. releases/<ts>_<sha>
+
+# 6) atomic switch: flip 'current' (all-or-nothing; relative target under $BASE)
 bold "Switch: current -> releases/$ID"
 ssh "$REMOTE" "ln -sfn 'releases/$ID' '$BASE/current'"
 
-# 6) restart the service onto the new release (needs NOPASSWD sudoers from P2a)
+# 7) restart onto the new release (unattended via NOPASSWD sudoers)
 bold "Restart $SERVICE"
 ssh "$REMOTE" "sudo systemctl restart '$SERVICE'"
 
-# 7) confirm the box is now serving the new version (pure signal — no BLE device needed)
-bold "Confirm: $HEALTH_URL/api/version"
-for _ in 1 2 3 4 5; do
-  sleep 2
-  if OUT="$(curl -fsS --max-time 20 "$HEALTH_URL/api/version" 2>/dev/null)"; then
-    echo "$OUT"
-    if printf '%s' "$OUT" | grep -q "\"$SHA\""; then
-      printf '\033[32m✓ %s is live at %s\033[0m\n' "$ID" "$HEALTH_URL"
-      exit 0
-    fi
-  fi
-done
-die "service did not report $SHA — inspect: ssh $REMOTE journalctl -u $SERVICE -n 40"
+# 8) health-check the new release; AUTO-ROLLBACK if it doesn't come up healthy
+bold "Health check: is $HEALTH_URL serving $SHA?"
+if health_ok "$SHA"; then
+  curl -s "$HEALTH_URL/api/version"; echo
+  printf '\033[32m✓ %s is live and healthy at %s\033[0m\n' "$ID" "$HEALTH_URL"
+  exit 0
+fi
+
+printf '\033[31m✗ new release failed health-check — ROLLING BACK\033[0m\n' >&2
+ssh "$REMOTE" "journalctl -u $SERVICE -n 20 --no-pager" 2>/dev/null | sed 's/^/   journal| /' >&2 || true
+[ -n "$PREV" ] || die "no previous release to roll back to — box may be down; inspect $REMOTE manually"
+
+bold "Rollback: current -> $PREV"
+ssh "$REMOTE" "ln -sfn '$PREV' '$BASE/current'"
+ssh "$REMOTE" "sudo systemctl restart '$SERVICE'"
+PREV_SHA="${PREV##*_}"                          # releases/<ts>_<sha> -> <sha>
+if health_ok "$PREV_SHA"; then
+  printf '\033[33m↩ rolled back to %s (serving %s) — box healthy on the previous release\033[0m\n' "$PREV" "$PREV_SHA" >&2
+  die "deploy of $ID aborted by health-check; previous release restored (no downtime left behind)"
+fi
+die "deploy FAILED and ROLLBACK is ALSO unhealthy — manual intervention needed on $REMOTE"
