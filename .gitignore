@@ -6,3 +6,5 @@ __pycache__/
 *.log
 secrets/
 deploy/local.env
+# private strategy notes — never publish
+docs/internal/
