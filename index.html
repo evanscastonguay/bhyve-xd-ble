@@ -265,14 +265,28 @@ function render(st){
   if(wet && st.active_zone){ const dot=$("#dot"+st.active_zone); if(dot) dot.classList.add("on"); }
 }
 
+// Background status: passive read that NEVER locks the UI, so the ON/OFF buttons are
+// usable the instant the page renders. Deferred slightly and cancelled by any user action,
+// so a quick tap is never stuck behind a status read (they share the device's one BLE link).
+let bgTimer=null, bgToken=0;
+function cancelBg(){ if(bgTimer){clearTimeout(bgTimer);bgTimer=null;} bgToken++; }  // also voids an in-flight bg render
+function scheduleBg(){ cancelBg(); const dev=curDevice, tok=bgToken; bgTimer=setTimeout(()=>bgStatus(dev,tok),1200); }
+async function bgStatus(dev,tok){
+  bgTimer=null;
+  if(busy || dev!==curDevice || tok!==bgToken) return;      // a user action / timer-switch took over
+  $("#state").textContent="reading…"; $("#state").className="pill idle";
+  try{ const st=await api("GET","/api/status");
+       if(!busy && dev===curDevice && tok===bgToken) render(st); }
+  catch(_){ if(!busy && dev===curDevice && tok===bgToken){ $("#state").textContent="tap ↻ for status"; } }
+}
 async function refresh(){
-  if(busy)return; setBusy(true,"reading status… (~10s)"); banner(null);
+  if(busy)return; cancelBg(); setBusy(true,"reading status…"); banner(null);
   try{ render(await api("GET","/api/status")); }
   catch(e){ banner("Couldn't read status: "+e.message+WAKE,"err"); }
   setBusy(false);
 }
 async function startZone(z){
-  if(busy)return; const mins=parseFloat($("#min"+z).value)||5;
+  if(busy)return; cancelBg(); const mins=parseFloat($("#min"+z).value)||5;
   setBusy(true,`starting Valve ${z}… (~10s)`); banner(null);
   try{const r=await api("POST",`/api/zones/${z}/start`,{minutes:mins}); render(r);
     banner(r.confirmed_watering?`Valve ${z} watering (${r.seconds_remaining}s).`
@@ -282,7 +296,7 @@ async function startZone(z){
   setBusy(false);
 }
 async function stopZone(z){
-  if(busy)return; setBusy(true,`stopping Valve ${z}… (~10s)`); banner(null);
+  if(busy)return; cancelBg(); setBusy(true,`stopping Valve ${z}… (~10s)`); banner(null);
   try{const r=await api("POST",`/api/zones/${z}/stop`); render(r);
     banner(r.confirmed_idle?`Valve ${z} stopped.`:`Valve ${z}: stop not confirmed — try again.`,
            r.confirmed_idle?"ok":"err");}
@@ -290,7 +304,7 @@ async function stopZone(z){
   setBusy(false);
 }
 async function stopAll(){
-  if(busy)return; setBusy(true,"stopping all… (~10s)"); banner(null);
+  if(busy)return; cancelBg(); setBusy(true,"stopping all… (~10s)"); banner(null);
   try{const r=await api("POST","/api/stop"); render(r);
     banner(r.confirmed_idle?"All valves stopped.":"Stop not confirmed — try again.",
            r.confirmed_idle?"ok":"err");}
@@ -355,11 +369,11 @@ function selectTimer(i){ if(i===curIndex)return; curIndex=i; buildTabs(); banner
 async function loadSelected(){
   const d=devices[curIndex]; curDevice=String(d.index);
   $("#ctl_name").textContent=d.name||("Timer "+(curIndex+1));
-  $("#state").textContent="reading…"; $("#state").className="pill idle";
-  buildValves(d.stations||4);
+  $("#state").textContent="—"; $("#state").className="pill idle";
+  buildValves(d.stations||4);           // buttons are usable IMMEDIATELY — no BLE wait
   buildScheduleForm(d.stations||4);
   setMode("now");                       // every timer switch starts on Now
-  await refresh();
+  scheduleBg();                         // status loads in the background, off the critical path
 }
 
 // ---- Schedule mode (author rules; engine wired later) ----
