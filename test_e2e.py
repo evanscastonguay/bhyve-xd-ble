@@ -606,6 +606,30 @@ def test_mqtt_parse_command_topic():
     assert mb.parse_command_topic("bhyve", "bhyve/x/valve/2/set") is None    # non-numeric idx
 
 
+def test_container_build_config_maps_options():
+    """The container entrypoint turns flat add-on/env options into the server's config.json shape."""
+    import container_entrypoint as ce
+    cfg = ce.build_config({
+        "name": "Back Yard", "address": "AA:BB:CC:DD:EE:01", "network_key": TEST_KEY,
+        "tz_offset_sec": -14400, "stations": 4, "host_scheduling": True,
+        "mqtt_host": "192.168.1.50", "mqtt_username": "bhyve", "mqtt_password": "pw",
+        "mqtt_default_minutes": 7,
+    })
+    assert cfg["host_scheduling"] is True
+    d = cfg["devices"][0]
+    assert d == {"name": "Back Yard", "address": "AA:BB:CC:DD:EE:01", "network_key": TEST_KEY,
+                 "tz_offset_sec": -14400, "stations": 4}
+    assert cfg["mqtt"]["host"] == "192.168.1.50" and cfg["mqtt"]["default_minutes"] == 7
+    assert cfg["mqtt"]["base_topic"] == "bhyve"          # default filled in
+
+
+def test_container_build_config_omits_mqtt_when_no_host():
+    import container_entrypoint as ce
+    cfg = ce.build_config({"address": "AA:BB:CC:DD:EE:01", "network_key": TEST_KEY})
+    assert "mqtt" not in cfg                              # MQTT block only when a broker host is given
+    assert cfg["devices"][0]["stations"] == 4            # sensible default
+
+
 def test_mqtt_parse_command_valve_and_automatic():
     import mqtt_bridge as mb
     assert mb.parse_command("bhyve", "bhyve/0/valve/2/set") == ("valve", 0, 2)
