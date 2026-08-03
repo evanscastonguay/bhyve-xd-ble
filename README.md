@@ -1,56 +1,76 @@
 # bhyve-xd-ble
 
-Local Bluetooth control of the **Orbit B-Hyve XD** 4-port hose timer — no cloud,
-no Wi-Fi hub, no Orbit app required. Set the clock, start/stop any zone, run a
-watering schedule, and **read the device's own state back for confirmation** — all
-from your own code, over BLE.
+Local Bluetooth control of the **Orbit B-Hyve XD** 4-port hose timer — no cloud, no Wi-Fi hub, no
+Orbit app required. It runs as a **small always-on local server next to the timer** — a browser UI,
+a REST API, and a CLI — that sets the clock, starts/stops any zone, runs a watering schedule, and
+**reads the device's own state back for confirmation**, all over BLE.
 
-Verified on real hardware — **HT34A-0001, firmware 0107** (FCC ML6-HT34BT) — on both
-Linux (BlueZ) and macOS (CoreBluetooth) via [`bleak`](https://github.com/hbldh/bleak).
-Every action self-confirms: the device reports `watering, 300s remaining` after a
-start and `idle` after a stop.
+Verified on real hardware — **HT34A-0001, firmware 0107** (FCC ML6-HT34BT) — on both Linux (BlueZ)
+and macOS (CoreBluetooth) via [`bleak`](https://github.com/hbldh/bleak). Every action self-confirms:
+the device reports `watering, 300s remaining` after a start and `idle` after a stop.
 
-> ⚠️ Unofficial and reverse-engineered; not affiliated with Orbit. **Don't update the
-> timer's firmware** — the protocol was reverse-engineered against fw 0107 and an
-> update may change it.
+> ⚠️ Unofficial and reverse-engineered; not affiliated with Orbit. **Don't update the timer's
+> firmware** — the protocol was reverse-engineered against fw 0107 and an update may change it.
 
 ## What works
 
-| Capability | Status |
+| | |
 |---|---|
-| **Control** — status · start · stop · set clock | ✅ Verified, each confirmed by device read-back |
-| **Scheduling** — per-valve rules, host-driven | ✅ Verified end-to-end (the server fires each valve at its time) |
-| **Onboarding** — add a timer from your Orbit account | ✅ `cli.py register` (CLI) or the web wizard |
-| **App-free enrollment** — key a factory-fresh timer | ✅ Durable across power-cycles (macOS, one device) |
-| On-device standalone schedules (runs without a host) | ⚠️ Dormant — the timer accepts a program but was never seen to run one autonomously |
+| **Control** | status · start · stop · set clock — each confirmed by the device's own read-back ✅ |
+| **Scheduling** | per-valve watering rules, run automatically by the server ✅ (verified end-to-end) |
+| **Onboarding** | add a timer from your Orbit account — `cli.py register` or the web wizard ✅ |
+| **App-free enrollment** | key a factory-fresh timer with no Orbit app ✅ (durable across power-cycles) |
+| **Interfaces** | **Web UI** · **REST API** · **CLI** — same shared control core |
+| **Deployment** | one command (`deploy/deploy.sh`) to an always-on Linux box: systemd, test-gated, health-checked, **auto-rollback** ✅ |
+| On-device standalone schedules (runs with no host) | ⚠️ dormant — the timer accepts a program but was never seen to run one autonomously |
 
-Full, honest caveats are in [Status & caveats](#status--caveats) at the bottom.
+Honest caveats are in [Status & caveats](#status--caveats).
 
 ## Quick start
 
-**Already have a network key?** (see [The network key](#the-network-key)) — three steps to a confirmed status read:
+**Requirements:** Python **3.10+**; on Linux, a working BlueZ stack (`bluetoothd` running); an Orbit
+account (to fetch the BLE key — or use `--self-key`, below); and a supported timer (HT34 4-station is
+what's verified). The timer is battery BLE and only advertises briefly, so **press a button on it**
+to wake it right before a first command.
 
 ```bash
 python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
-cp config.example.json config.json      # edit in your address + network key
-./venv/bin/python cli.py status         # press a button on the timer first to wake it
 ```
 
-You should see the clock, watering state, and battery read back from the device.
+**A) Try it from the CLI (starting from nothing).** One command logs into Orbit once, fetches the
+key, finds the timer, and writes `config.json`:
 
-**Starting from nothing?** Jump to [Add a timer](#add-a-timer) — one command logs into your
-Orbit account, fetches the key, finds the timer, and writes `config.json` for you.
+```bash
+./venv/bin/python cli.py register you@example.com --name "Back Yard"
+./venv/bin/python cli.py status            # clock / watering state / battery, read back live
+```
 
-### Platform & prerequisites
+**B) Run the web UI + API.** Start the server and open it in any browser on your network:
 
-- **Linux (BlueZ):** `address` in `config.json` is the **MAC**, e.g. `AA:BB:CC:DD:EE:FF`.
-- **macOS (CoreBluetooth):** `address` is an opaque per-Mac **UUID** (stable per peripheral,
-  per Mac); `cli.py scan` / `register` finds it for you. Behavior is identical to Linux —
-  the arming sequence is platform-neutral.
-- The timer is **battery BLE** and only advertises briefly, so **press a button on the timer**
-  to wake it right before running a command.
+```bash
+./venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000
+# open http://<this-host>:8000/  →  ＋ Add timer (same onboarding flow), then control + schedule
+```
 
-## Usage
+**Already have a `config.json`** (address + network key)? Skip registration — `cli.py status` or the
+server just work. See [The network key](#the-network-key) for what goes in it.
+
+- **Linux (BlueZ):** `address` in `config.json` is the **MAC** (`AA:BB:CC:DD:EE:FF`).
+- **macOS (CoreBluetooth):** `address` is an opaque per-Mac **UUID**; `cli.py scan` / `register`
+  finds it for you. Behavior is identical to Linux — the arming sequence is platform-neutral.
+
+## Interfaces
+
+Three ways in, one shared control core (`bhyve_xd.py`) — pick by task:
+
+- **Web UI** (`/`) — the everyday interface: per-valve ON/OFF with a run time, multi-timer tabs, the
+  schedule editor, and the **Add timer** wizard. Loads instantly; status fills in a moment later
+  (it's [cached server-side](#a-note-on-latency)).
+- **REST API** — automate it: `GET /api/status`, `GET /api/version`, `POST /api/zones/{z}/start`,
+  `POST /api/zones/{z}/stop`, `POST /api/stop`, `GET|PUT /api/scheduling`, plus the onboarding routes.
+- **CLI** (`cli.py`) — scripting and setup from a terminal.
+
+## Usage (CLI)
 
 ```bash
 python cli.py status            # read clock / watering state / battery
@@ -62,17 +82,10 @@ python cli.py scan              # list BLE devices (find the address)
 python cli.py register          # discover + save a NEW timer to config.json
 ```
 
-With several timers in `config.json`, target one with `--device <name|index>` (default =
-the first device):
-
-```bash
-python cli.py status --device "New Timer"
-python cli.py start 1 300 --device 1
-```
-
-### Library use
+With several timers in `config.json`, target one with `--device <name|index>` (default = the first).
 
 ```python
+# library use
 from bhyve_xd import BHyveXD
 dev = BHyveXD("AA:BB:CC:DD:EE:FF", "<network_key_hex>", tz_offset_sec=-14400)
 async with dev.session() as s:
@@ -83,30 +96,49 @@ async with dev.session() as s:
     await s.stop()
 ```
 
-## Scheduling (host-driven)
+## Scheduling
 
-Author per-valve watering rules in the web UI (**🗓 Schedule** tab): valve · start time · days ·
-duration. Then choose how they run:
+Author per-valve rules in the web UI (**🗓 Schedule** tab): valve · start time · days · duration.
+Then pick how they run:
 
-- **On this Mac** — the server fires each valve at its scheduled time over Bluetooth (the device
-  auto-stops after the duration). **Verified end-to-end.** A failed/timed-out fire is retried on
-  the next tick; a rule fires once per day even if a tick is late (bounded catch-up). The Schedule
-  tab shows the next run and whether the last one succeeded (`GET /api/scheduling`).
+- **Automatic** — the server fires each valve at its scheduled time over Bluetooth (the device
+  auto-stops after the duration). **Verified end-to-end.** A failed/timed-out fire is retried on the
+  next tick; a rule fires once per day even if a tick is late (bounded catch-up). The tab shows the
+  next run and whether the last one succeeded (`GET /api/scheduling`).
 - **Off** — rules are saved but nothing runs them.
 
-**This only runs while the server (and host) is up and in Bluetooth range.** On macOS, keep it awake:
+Automatic scheduling runs **only while the server is up and in Bluetooth range** — which is exactly
+why you run it on an always-on box (next section), not a laptop that sleeps.
 
-```bash
-caffeinate -s uvicorn server:app --host 0.0.0.0 --port 8000
-```
+> On-device (standalone) scheduling — storing the program on the timer so it runs with no host — is
+> **not enabled**: the timer accepts and activates a program byte-identically to the Orbit app, but
+> was never seen to execute one autonomously in testing (see `docs/SPIKE_schedule.md`). That code
+> stays in the repo, tested but dormant.
 
-If the host sleeps, is off, or is out of range at a scheduled time, that run is missed — which is
-why the next step is running the server on an always-on Linux box near the timer.
+## Run it 24/7 (Linux)
 
-> On-device (standalone) scheduling — storing the program on the timer so it runs without a host —
-> is **not enabled**: the timer accepts and activates a program byte-identically to the Orbit app,
-> but was never seen to autonomously execute one in testing (see `docs/SPIKE_schedule.md`). That
-> code stays in the repo, tested but dormant, pending confirmation that this unit runs schedules at all.
+For real use you want the server always on, next to the timer — a Raspberry Pi or any always-on
+Linux box, not your laptop. The repo ships a small, robust deployment setup:
+
+- **Immutable releases:** each deploy lands under `~/bhyve/releases/<timestamp>_<sha>/` with its own
+  venv; `config.json` + `secrets/` live once in `~/bhyve/shared/` and are symlinked into every
+  release (so an update can never clobber your key); a `~/bhyve/current` symlink is what runs.
+- **systemd service** (`bhyve.service`) runs `uvicorn` on boot and restarts on failure — survives
+  reboots, no terminal needed. (On a laptop, set logind `HandleLidSwitch=ignore` so a closed lid
+  doesn't suspend it.)
+- **One-command updates from your dev machine:**
+
+  ```bash
+  ./deploy/deploy.sh        # from the repo on your Mac/dev box
+  ```
+
+  It runs the **test suite** (aborts on red), rsyncs a new release, builds its venv, stamps the
+  version, **atomically** flips `current`, restarts the service, then **health-checks** the new
+  release (`/api/version` + `/`) and **automatically rolls back** to the previous release if it
+  doesn't come up. A bad deploy can't take down watering.
+
+One-time box setup (the release layout, the systemd unit, and a scoped `sudoers` line for
+password-less restart) is documented in **`deploy/README.md`**.
 
 ## Add a timer
 
@@ -120,21 +152,17 @@ python cli.py register --name "Back Yard"                 # reuse the key alread
 python cli.py register you@example.com --name "Back Yard" # first run: log in once, fetch the key
 ```
 
-It reuses the account key already in `config.json` when present (so adding another timer needs
-**no cloud login**), otherwise logs in once, then: prompts you to release the phone → **catches the
-timer's live advertisement** → reads its MAC + status back → writes `config.json` → confirms.
-
-- First-run password is read at a **hidden** prompt (never stored, never logged; MFA accounts are
-  unsupported and reported clearly).
-- Several timers on the account → a **numbered chooser** (or pass `--device-mac <MAC>` to skip it).
-
-**Or from the browser:** run the server (`uvicorn server:app`), open the web UI, click **＋ Add
-timer** — a wizard runs the same flow with live status and error hints.
+It reuses the account key already in `config.json` when present (so adding another timer needs no
+cloud login), otherwise logs in once, then: prompts you to release the phone → **catches the timer's
+live advertisement** → reads its MAC + status back → writes `config.json` → confirms. First-run
+password is read at a hidden prompt (never stored; MFA is unsupported and reported clearly). Several
+timers on the account → a numbered chooser (or pass `--device-mac <MAC>`). The web **Add timer**
+wizard runs the same flow with live status.
 
 ### Factory-fresh, app-free (`provision`)
 
 `cli.py provision` enrolls a **factory-reset / brand-new** timer **without the Orbit app** — it
-writes the account key onto the device itself (char `6c76`), then saves it:
+writes the account key onto the device (char `6c76`), then saves it:
 
 ```bash
 python cli.py provision                 # (or: python cli.py provision you@example.com)
@@ -143,13 +171,13 @@ python cli.py provision                 # (or: python cli.py provision you@examp
 Factory-reset the timer into **pairing mode** (dial to OFF, hold ~10 s until the full display
 lights), turn the **phone's Bluetooth OFF**, then run it.
 
-> **The one precondition:** phone Bluetooth **OFF** before you press Enter. A B-Hyve accepts only
-> one BLE connection and won't advertise while the phone holds it — released, it advertises freely
-> and is caught reliably. Add `--device-mac <MAC>` to target a specific unit.
+> **The one precondition:** phone Bluetooth **OFF** before you press Enter. A B-Hyve accepts only one
+> BLE connection and won't advertise while the phone holds it — released, it advertises freely and is
+> caught reliably. Add `--device-mac <MAC>` to target a specific unit.
 
 Two key modes: **Orbit** (`provision` — the account key; the Orbit app and our tools interoperate)
 and **self-key** (`provision --self-key` — our own generated key, no Orbit account; stashed in
-`secrets/`, and the Orbit app can no longer control the device). Both are proven durable on hardware
+`secrets/`, and the Orbit app can no longer control the device). Both are proven durable
 (see [Status & caveats](#status--caveats)). Mechanism: `docs/SPIKE_provisioning.md`.
 
 ## How it works
@@ -186,15 +214,22 @@ is ignored; the armed one works.
   **Write Command** (write-without-response).
 - **Inner message:** `[AA 77 5A 0F][len][00][protobuf][crc16-ccitt]`.
 - **Replies:** after arming, rich notifications; decode with `rx_ctr` (brute-force near the running
-  value to resync). Fields: `7` = clock (epoch), `16` = status (`sub1` run_state 1=idle/4=watering,
-  `sub6.7` = seconds remaining), `46` = battery.
+  value to resync). Fields: `7` = clock (epoch), `16` = status (`sub1` run_state, `sub6.7` = seconds
+  remaining), `46` = battery.
 
 Full reverse-engineering detail: `docs/SPIKE_provisioning.md`, `docs/SPIKE_schedule.md`.
+
+### A note on latency
+
+A BLE session (connect → arm → read) takes ~8–12 s, so the server **caches the last status** and
+serves `GET /api/status` instantly; a live read happens only on a cold cache or `?fresh=1` (the web
+UI's ↻ Refresh). Start/stop always talk to the device and refresh the cache. This is why the page is
+instant even though the radio is slow.
 
 ## Architecture
 
 All Bluetooth/protocol logic lives in **`bhyve_xd.py`**. The CLI and the REST server are thin
-wrappers that call the same high-level methods — no duplicated control logic:
+wrappers over the same high-level methods — no duplicated control logic:
 
 ```
        bhyve_xd.py  (cipher · protocol · BHyveXD.status/start/stop/sync_clock · read-back)
@@ -202,19 +237,17 @@ wrappers that call the same high-level methods — no duplicated control logic:
  cli.py ──┘                     └── server.py ──▶ index.html (web UI calls the REST API)
 ```
 
-`BHyveXD.from_config()` is the single config loader; `DeviceStatus.to_dict()` the single serializer.
-Change the protocol once, in one place.
-
-| File | Purpose |
+| Path | Purpose |
 |---|---|
 | `bhyve_xd.py` | **the library** — cipher, protocol, `BHyveXD` controller + read-back (all logic) |
 | `cli.py` | thin CLI over `bhyve_xd` |
-| `server.py` | thin FastAPI REST API + host scheduler over `bhyve_xd` |
+| `server.py` | thin FastAPI REST API + web UI + host scheduler + status cache |
 | `index.html` | web UI (calls the REST API) |
-| `onboarding.py` | cloud login, device discovery, and config write — powers `register` |
+| `onboarding.py` | cloud login, device discovery, config write — powers `register` / the wizard |
 | `schedule.py` / `scheduler.py` | host-scheduling store + due-rule / next-run logic |
 | `schedule_device.py` | on-device schedule codec (dormant — see `docs/SPIKE_schedule.md`) |
 | `provision_proof.py` | live-hardware proof of durable provisioning |
+| `deploy/` | `deploy.sh` (push-deploy) + `sudoers` snippet + setup `README` |
 | `test_e2e.py` | end-to-end tests against a fake device (no hardware) |
 | `config.example.json` | copy to `config.json`, fill in address + network key |
 | `docs/` | protocol reference (`SPIKE_*`), `plans/`, and `archive/` |
@@ -225,33 +258,34 @@ Hardware-free and repeatable:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest test_e2e.py -q                  # 131 tests, no device needed (~1s)
+python -m pytest test_e2e.py -q                  # 136 tests, no device needed (~1s)
 ```
 
-`test_e2e.py` runs every operation against a **fake B-Hyve** (`FakeTimer`) that emulates the HT34A
-at the byte level — AES handshake, frame decrypt/reassembly, watering state, correctly-encrypted
-status notifications. `bleak` and `aiohttp` are patched, so no radio or network is touched. Reading
+`test_e2e.py` runs every operation against a **fake B-Hyve** (`FakeTimer`) that emulates the HT34A at
+the byte level — AES handshake, frame decrypt/reassembly, watering state, correctly-encrypted status
+notifications. `bleak` and `aiohttp` are patched, so no radio or network is touched. Reading
 `is_watering=True` back proves the whole chain: `arm → command → encrypted notification → counter
-resync → parse → DeviceStatus`, plus the CLI, REST API, macOS pairing, and cloud login.
+resync → parse → DeviceStatus`, plus the CLI, REST API, status cache, macOS pairing, and cloud login.
 
 ## Status & caveats
 
-**Proven on real hardware (2026-08-02):**
+**Proven on real hardware (2026-08):**
 
 - **Control & scheduling** — status/start/stop each confirmed by the device's own read-back;
-  host-driven scheduling fired a valve on time with a read-back-confirmed start.
-- **App-free provisioning is durable** — `provision_proof.py` confirmed a device was **keyless
-  first** (negative control), provisioned it **app-free**, and it **survived 3 power-cycles**, each
-  re-verified in a fresh process. **Both** key modes (Orbit key and self-key, app never opened) met
-  this same bar. The device drops the BLE link after keying, so provisioning is two-phase
-  (write → reconnect → finalize) and takes ~2–3 min.
+  host-driven scheduling fired a valve on time with a read-back-confirmed start. Runs the same on the
+  Linux deployment as on the Mac.
+- **App-free provisioning is durable** — `provision_proof.py` confirmed a device was **keyless first**
+  (negative control), provisioned it **app-free**, and it **survived 3 power-cycles**, each re-verified
+  in a fresh process. **Both** key modes (Orbit key and self-key, app never opened) met this bar. The
+  device drops the BLE link after keying, so provisioning is two-phase (write → reconnect → finalize),
+  ~2–3 min.
 
 **Honest limits:**
 
 - Provisioning is proven on **one device** (finalize bytes are **HT34 4-station** specific); not
   repeated across devices/models or re-verified on Linux/BlueZ.
 - Enrolls for **local control only** — the device is not registered in Orbit's cloud/app.
-- Host-driven scheduling runs **only while the host is awake, serving, and in BLE range**.
+- Automatic scheduling runs **only while the server is up and in BLE range** (hence the always-on box).
 - **On-device standalone schedules are unverified** — accepted and activated byte-identically to the
   app, but never seen to run autonomously; kept in the repo, tested but dormant.
 
