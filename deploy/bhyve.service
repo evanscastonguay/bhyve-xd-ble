@@ -1,5 +1,5 @@
 # Template for the system unit that runs the server on the always-on Linux box.
-# Paths/user assume the ~/bhyve/{releases,shared,current} layout and user `evans` — adjust to match.
+# Paths/user assume the ~/bhyve/{releases,shared,current} layout and user `pi` — adjust to match.
 # Install (one-time): sudo cp deploy/bhyve.service /etc/systemd/system/bhyve.service
 #                     sudo systemctl daemon-reload && sudo systemctl enable --now bhyve.service
 [Unit]
@@ -9,10 +9,10 @@ Wants=network-online.target bluetooth.service
 
 [Service]
 Type=simple
-User=evans
-Group=evans
-WorkingDirectory=/home/evans/bhyve/current
-ExecStart=/home/evans/bhyve/current/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/bhyve/current
+ExecStart=/home/pi/bhyve/current/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
 

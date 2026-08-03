@@ -19,9 +19,13 @@
 # Overridable via env: BHYVE_REMOTE  BHYVE_BASE  BHYVE_HEALTH_URL  BHYVE_SERVICE
 set -euo pipefail
 
+# Load machine-local deploy targets if present (gitignored; copy deploy/local.env.example)
+_here="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$_here/local.env" ] && . "$_here/local.env"
+
 REMOTE="${BHYVE_REMOTE:-bhyve-linux}"
-BASE="${BHYVE_BASE:-/home/evans/bhyve}"
-HEALTH_URL="${BHYVE_HEALTH_URL:-http://192.168.2.169:8000}"
+BASE="${BHYVE_BASE:-/home/pi/bhyve}"
+HEALTH_URL="${BHYVE_HEALTH_URL:-http://192.168.1.50:8000}"
 SERVICE="${BHYVE_SERVICE:-bhyve.service}"
 KEEP="${BHYVE_KEEP:-5}"   # how many releases to retain after a successful deploy
 

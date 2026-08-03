@@ -31,8 +31,8 @@ from bhyve_xd import (FRAME_MAGIC, MSG_HEADER, BHyveXD, NotABHyveError,
                       _keystream_block, parse_reply)
 
 TEST_KEY = "00112233445566778899aabbccddeeff"
-TEST_MAC = "44:67:55:D8:7A:B9"
-_MAC_BYTES = bytes.fromhex("446755d87ab9")
+TEST_MAC = "AA:BB:CC:DD:EE:FF"
+_MAC_BYTES = bytes.fromhex("aabbccddeeff")
 
 READ_CHAR = "00006c73-fe32-4f58-8b78-98e42b2c047f"
 WRITE_CHAR = "00006c72-fe32-4f58-8b78-98e42b2c047f"
@@ -751,7 +751,7 @@ def test_onboard_start_account_mode_injects_key_from_session(monkeypatch, tmp_pa
     monkeypatch.setattr(server, "_account_session",
                         {"email": "me@x.com", "key": "dd" * 16,
                          "devices": [{"name": "Smart Hose Tap Timer",
-                                      "mac": "44:67:55:D8:71:B0", "stations": 4}]}, raising=False)
+                                      "mac": "AA:BB:CC:DD:EE:01", "stations": 4}]}, raising=False)
     captured = {}
 
     async def fake_flow(params, gate):
@@ -762,13 +762,13 @@ def test_onboard_start_account_mode_injects_key_from_session(monkeypatch, tmp_pa
 
     async def scenario():
         await server.onboard_start(server.OnboardStartBody(mode="account",
-                                                           device_mac="44:67:55:D8:71:B0"))
+                                                           device_mac="AA:BB:CC:DD:EE:01"))
         await server._job.task
 
     asyncio.run(scenario())
     assert captured["mode"] == "account" and captured["key"] == "dd" * 16   # injected server-side
     assert captured["name"] == "Smart Hose Tap Timer"                       # from the cached list
-    assert captured["device_mac"] == "44:67:55:D8:71:B0"
+    assert captured["device_mac"] == "AA:BB:CC:DD:EE:01"
 
 
 def test_onboard_start_account_mode_falls_back_to_saved_key(monkeypatch, tmp_path):
@@ -790,7 +790,7 @@ def test_onboard_start_account_mode_falls_back_to_saved_key(monkeypatch, tmp_pat
 
     async def scenario():
         await server.onboard_start(server.OnboardStartBody(mode="account",
-                                                           device_mac="44:67:55:D8:71:B0"))
+                                                           device_mac="AA:BB:CC:DD:EE:01"))
         await server._job.task
 
     asyncio.run(scenario())
@@ -892,8 +892,8 @@ def test_api_onboard_state_reports_saved_key(monkeypatch, tmp_path):
 def _multi_account_cloud():
     async def fake_cloud(email, pw):
         return [
-            {"name": "zone1-4 timer", "mac": "44:67:55:D8:78:00", "network_key": TEST_KEY, "stations": 4},
-            {"name": "Smart Hose Tap Timer", "mac": "44:67:55:D8:71:B0", "network_key": TEST_KEY, "stations": 4},
+            {"name": "zone1-4 timer", "mac": "AA:BB:CC:DD:EE:02", "network_key": TEST_KEY, "stations": 4},
+            {"name": "Smart Hose Tap Timer", "mac": "AA:BB:CC:DD:EE:01", "network_key": TEST_KEY, "stations": 4},
         ]
     return fake_cloud
 
@@ -904,16 +904,16 @@ def test_account_login_caches_persists_and_hides_key(monkeypatch, tmp_path):
     import onboarding as O
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"devices": [                       # first timer already added
-        {"name": "zone1-4 timer", "mac": "44:67:55:D8:78:00", "network_key": TEST_KEY, "stations": 4}]}))
+        {"name": "zone1-4 timer", "mac": "AA:BB:CC:DD:EE:02", "network_key": TEST_KEY, "stations": 4}]}))
     monkeypatch.setattr(server, "CONFIG", str(cfg))
     monkeypatch.setattr(server, "_account_session", None, raising=False)
     monkeypatch.setattr(O, "cloud_fetch", _multi_account_cloud())
 
     res = asyncio.run(server.account_login(server.AccountLoginBody(email="me@x.com", password="pw")))
     assert res["email"] == "me@x.com"
-    assert {t["mac"] for t in res["timers"]} == {"44:67:55:D8:78:00", "44:67:55:D8:71:B0"}
+    assert {t["mac"] for t in res["timers"]} == {"AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:01"}
     added = {t["mac"]: t["added"] for t in res["timers"]}
-    assert added["44:67:55:D8:78:00"] is True and added["44:67:55:D8:71:B0"] is False
+    assert added["AA:BB:CC:DD:EE:02"] is True and added["AA:BB:CC:DD:EE:01"] is False
     assert TEST_KEY not in json.dumps(res)                        # key never in the body
     acct = O.read_account(str(cfg))                               # persisted {email,key}
     assert acct == {"email": "me@x.com", "network_key": TEST_KEY}
@@ -943,16 +943,16 @@ def test_account_timers_lists_session_with_added_flags(monkeypatch, tmp_path):
     import json
     import server
     cfg = tmp_path / "config.json"
-    cfg.write_text('{"devices":[{"mac":"44:67:55:D8:78:00"}]}')
+    cfg.write_text('{"devices":[{"mac":"AA:BB:CC:DD:EE:02"}]}')
     monkeypatch.setattr(server, "CONFIG", str(cfg))
     monkeypatch.setattr(server, "_account_session",
                         {"email": "me@x.com", "key": TEST_KEY, "devices": [
-                            {"name": "A", "mac": "44:67:55:D8:78:00", "stations": 4},
-                            {"name": "B", "mac": "44:67:55:D8:71:B0", "stations": 4}]}, raising=False)
+                            {"name": "A", "mac": "AA:BB:CC:DD:EE:02", "stations": 4},
+                            {"name": "B", "mac": "AA:BB:CC:DD:EE:01", "stations": 4}]}, raising=False)
     res = asyncio.run(server.account_timers())
     assert res["signed_in"] is True
     added = {t["mac"]: t["added"] for t in res["timers"]}
-    assert added["44:67:55:D8:78:00"] is True and added["44:67:55:D8:71:B0"] is False
+    assert added["AA:BB:CC:DD:EE:02"] is True and added["AA:BB:CC:DD:EE:01"] is False
     assert TEST_KEY not in json.dumps(res)               # key never in the body
 
 
@@ -1003,13 +1003,13 @@ def test_api_onboard_register_reuses_key(monkeypatch, tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"devices": [
         {"name": "Old", "address": "OLD", "network_key": TEST_KEY,
-         "mac": "44:67:55:D8:7A:B9", "stations": 4}]}))
+         "mac": "AA:BB:CC:DD:EE:FF", "stations": 4}]}))
     monkeypatch.setattr(server, "CONFIG", str(cfg))
 
     async def fake_catch(key, *, want_mac=None, **kw):
         assert key == TEST_KEY
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-NEW", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
     def no_cloud(*a, **k):
         raise AssertionError("cloud_fetch must not be called when a key exists")
@@ -1017,7 +1017,7 @@ def test_api_onboard_register_reuses_key(monkeypatch, tmp_path):
     monkeypatch.setattr(O, "catch_device", fake_catch)
     monkeypatch.setattr(O, "cloud_fetch", no_cloud)
     res = asyncio.run(server.onboard_register(server.OnboardBody(name="New Timer")))
-    assert res["registered"]["mac"] == "44:67:55:D8:71:B0"
+    assert res["registered"]["mac"] == "AA:BB:CC:DD:EE:01"
     assert "network_key" not in res["registered"]          # key never leaves the server
     data = json.loads(cfg.read_text())
     assert [d["name"] for d in data["devices"]] == ["Old", "New Timer"]
@@ -1054,18 +1054,18 @@ def test_api_onboard_register_cloud_path(monkeypatch, tmp_path):
     FETCHED = "aabbccddeeff00112233445566778899"
 
     async def fake_cloud(email, password):
-        return [{"name": "Yard", "mac": "44:67:55:D8:71:B0", "network_key": FETCHED, "stations": 4}]
+        return [{"name": "Yard", "mac": "AA:BB:CC:DD:EE:01", "network_key": FETCHED, "stations": 4}]
 
     async def fake_catch(key, *, want_mac=None, **kw):
         assert key == FETCHED
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-NEW", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
     monkeypatch.setattr(O, "cloud_fetch", fake_cloud)
     monkeypatch.setattr(O, "catch_device", fake_catch)
     res = asyncio.run(server.onboard_register(
         server.OnboardBody(name="Yard", email="me@x.com", password="pw")))
-    assert res["registered"]["mac"] == "44:67:55:D8:71:B0"
+    assert res["registered"]["mac"] == "AA:BB:CC:DD:EE:01"
     assert "network_key" not in res["registered"]
     assert json.loads(cfg.read_text())["devices"][0]["network_key"] == FETCHED
 
@@ -1201,12 +1201,12 @@ def test_cli_register_reuses_key_without_cloud(tmp_path, monkeypatch, capsys):
     p = tmp_path / "config.json"
     p.write_text(json.dumps({"devices": [
         {"name": "Old", "address": "UUID-OLD", "network_key": TEST_KEY,
-         "mac": "44:67:55:D8:7A:B9", "stations": 4}]}))
+         "mac": "AA:BB:CC:DD:EE:FF", "stations": 4}]}))
 
     async def fake_catch(key, *, want_mac=None, **kw):
         assert key == TEST_KEY                     # the reused account key
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-NEW", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
     def no_cloud(*a, **k):
         raise AssertionError("cloud_fetch must NOT be called when a key already exists")
@@ -1219,7 +1219,7 @@ def test_cli_register_reuses_key_without_cloud(tmp_path, monkeypatch, capsys):
     assert [d["name"] for d in data["devices"]] == ["Old", "New Timer"]
     new = data["devices"][1]
     assert new["address"] == "UUID-NEW"
-    assert new["mac"] == "44:67:55:D8:71:B0"
+    assert new["mac"] == "AA:BB:CC:DD:EE:01"
     assert new["network_key"] == TEST_KEY          # reused, not re-fetched
     assert new["key_source"] == "orbit"            # labelled as the shared account key
 
@@ -1231,7 +1231,7 @@ def test_cli_register_reports_catch_failure(tmp_path, monkeypatch, capsys):
     import onboarding as O
     p = tmp_path / "config.json"
     p.write_text(json.dumps({"devices": [
-        {"name": "Old", "network_key": TEST_KEY, "mac": "44:67:55:D8:7A:B9"}]}))
+        {"name": "Old", "network_key": TEST_KEY, "mac": "AA:BB:CC:DD:EE:FF"}]}))
 
     async def boom(key, *, want_mac=None, **kw):
         raise O.ResolveError("nothing caught — phone Bluetooth OFF?")
@@ -1267,13 +1267,13 @@ def test_cli_register_cloud_first_writes_fetched_key(tmp_path, monkeypatch):
 
     async def fake_cloud(email, password):
         assert email == "me@x.com" and password == "pw"
-        return [{"name": "Front", "mac": "44:67:55:D8:71:B0",
+        return [{"name": "Front", "mac": "AA:BB:CC:DD:EE:01",
                  "network_key": FETCHED_KEY, "stations": 4}]
 
     async def fake_catch(key, *, want_mac=None, **kw):
         assert key == FETCHED_KEY                       # the fetched key is used to catch
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-NEW", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
     monkeypatch.setattr(O, "cloud_fetch", fake_cloud)
     monkeypatch.setattr(O, "catch_device", fake_catch)
@@ -1283,7 +1283,7 @@ def test_cli_register_cloud_first_writes_fetched_key(tmp_path, monkeypatch):
     data = json.loads(p.read_text())
     assert len(data["devices"]) == 1
     d = data["devices"][0]
-    assert d["mac"] == "44:67:55:D8:71:B0"
+    assert d["mac"] == "AA:BB:CC:DD:EE:01"
     assert d["address"] == "UUID-NEW"
     assert d["network_key"] == FETCHED_KEY             # fetched, not typed in
 
@@ -1297,15 +1297,15 @@ def test_cli_register_cloud_multi_device_uses_chooser(tmp_path, monkeypatch):
     p = tmp_path / "config.json"
 
     async def fake_cloud(email, password):
-        return [{"name": "Front", "mac": "44:67:55:D8:7A:B9", "network_key": TEST_KEY, "stations": 4},
-                {"name": "Back", "mac": "44:67:55:D8:71:B0", "network_key": TEST_KEY, "stations": 6}]
+        return [{"name": "Front", "mac": "AA:BB:CC:DD:EE:FF", "network_key": TEST_KEY, "stations": 4},
+                {"name": "Back", "mac": "AA:BB:CC:DD:EE:01", "network_key": TEST_KEY, "stations": 6}]
 
     captured = {}
 
     async def fake_catch(key, *, want_mac=None, **kw):
         captured["want_mac"] = want_mac
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-NEW", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
     monkeypatch.setattr(O, "cloud_fetch", fake_cloud)
     monkeypatch.setattr(O, "catch_device", fake_catch)
@@ -1313,7 +1313,7 @@ def test_cli_register_cloud_multi_device_uses_chooser(tmp_path, monkeypatch):
     asyncio.run(cli.cmd_register("me@x.com", path=str(p), ask_prompt=False,
                                  choose_fn=lambda _p: "1"))     # pick "Back"
 
-    assert captured["want_mac"] == "44:67:55:D8:71:B0"          # chose device [1]
+    assert captured["want_mac"] == "AA:BB:CC:DD:EE:01"          # chose device [1]
     data = json.loads(p.read_text())
     assert [d["name"] for d in data["devices"]] == ["Back"]
     assert data["devices"][0]["stations"] == 6
@@ -1428,7 +1428,7 @@ def test_catch_device_finds_bhyve_by_advertisement():
 def test_catch_device_matches_wanted_mac_among_several():
     """With want_mac set, a non-matching B-Hyve is skipped and the right one returned."""
     import onboarding as O
-    other = FakeTimer(mac="44:67:55:11:22:33")
+    other = FakeTimer(mac="AA:BB:CC:DD:EE:03")
     want = FakeTimer(mac=TEST_MAC)
     adverts = [_adv("UUID-OTHER", "ASR", -50), _adv("UUID-WANT", "ASR", -70)]
     resolver = lambda a: {"UUID-OTHER": other, "UUID-WANT": want}.get(a)
@@ -1520,13 +1520,13 @@ async def _drive_onboard(gen, gate, choices):
     return events
 
 
-def _onboard_device_from_cloud(mac="44:67:55:D8:71:B0"):
+def _onboard_device_from_cloud(mac="AA:BB:CC:DD:EE:01"):
     return {"name": "Yard", "mac": mac, "network_key": TEST_KEY, "stations": 4}
 
 
 async def _fake_provision(key, *, want_mac=None, **kw):
-    st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-    return "UUID-NEW", "44:67:55:D8:71:B0", st
+    st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+    return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
 
 def test_onboard_flow_orbit_success(tmp_path, monkeypatch):
@@ -1541,7 +1541,7 @@ def test_onboard_flow_orbit_success(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "provision_device", _fake_provision)
     gate = O.OnboardGate()
     params = {"mode": "orbit", "email": "me@x.com", "password": "pw",
-              "device_mac": "44:67:55:D8:71:B0", "path": str(p)}
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(p)}
     events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_reset": None}))
     assert events[-1]["id"] == "save" and events[-1]["verified"]
     d = json.loads(p.read_text())["devices"][0]
@@ -1561,16 +1561,16 @@ def test_onboard_flow_multiple_devices_shows_picker(tmp_path, monkeypatch):
 
     async def multi_cloud(email, pw):
         return [
-            {"name": "zone1-4 timer", "mac": "44:67:55:D8:78:00", "network_key": KEY_A, "stations": 4},
-            {"name": "Smart Hose Tap Timer", "mac": "44:67:55:D8:71:B0", "network_key": KEY_B, "stations": 4},
+            {"name": "zone1-4 timer", "mac": "AA:BB:CC:DD:EE:02", "network_key": KEY_A, "stations": 4},
+            {"name": "Smart Hose Tap Timer", "mac": "AA:BB:CC:DD:EE:01", "network_key": KEY_B, "stations": 4},
         ]
 
     captured = {}
 
     async def cap_provision(key, *, want_mac=None, **kw):
         captured["key"], captured["mac"] = key, want_mac
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-NEW", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
     monkeypatch.setattr(O, "cloud_fetch", multi_cloud)
     monkeypatch.setattr(O, "provision_device", cap_provision)
@@ -1578,10 +1578,10 @@ def test_onboard_flow_multiple_devices_shows_picker(tmp_path, monkeypatch):
     params = {"mode": "orbit", "email": "me@x.com", "password": "pw", "path": str(p)}  # no device_mac
     events = asyncio.run(_drive_onboard(
         O.onboard_flow(params, gate), gate,
-        {"pick_device": "44:67:55:D8:71:B0", "await_reset": None}))
+        {"pick_device": "AA:BB:CC:DD:EE:01", "await_reset": None}))
 
     pick = next(e for e in events if e["id"] == "pick_device" and e["state"] == "waiting_user")
-    assert {o["value"] for o in pick["options"]} == {"44:67:55:D8:78:00", "44:67:55:D8:71:B0"}
+    assert {o["value"] for o in pick["options"]} == {"AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:01"}
     assert any(o["label"] == "Smart Hose Tap Timer" for o in pick["options"])  # picked by NAME
     assert captured["key"] == KEY_B                       # the CHOSEN device's key provisions
     saved = json.loads(p.read_text())["devices"][0]
@@ -1603,14 +1603,14 @@ def test_onboard_flow_account_with_mac_adopts_not_provisions(tmp_path, monkeypat
 
     async def rec_catch(key, *, want_mac=None, **kw):
         called["adopt"] += 1
-        assert key == ACC and want_mac == "44:67:55:D8:71:B0"
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-ADOPT", "44:67:55:D8:71:B0", st
+        assert key == ACC and want_mac == "AA:BB:CC:DD:EE:01"
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-ADOPT", "AA:BB:CC:DD:EE:01", st
 
     async def rec_prov(key, *, want_mac=None, **kw):
         called["prov"] += 1
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID", "AA:BB:CC:DD:EE:01", st
 
     def no_cloud(*a, **k):
         raise AssertionError("account mode must not call cloud_fetch")
@@ -1620,7 +1620,7 @@ def test_onboard_flow_account_with_mac_adopts_not_provisions(tmp_path, monkeypat
     monkeypatch.setattr(O, "cloud_fetch", no_cloud)
     gate = O.OnboardGate()
     params = {"mode": "account", "key": ACC, "name": "Smart Hose Tap Timer",
-              "device_mac": "44:67:55:D8:71:B0", "stations": 4, "path": str(p)}
+              "device_mac": "AA:BB:CC:DD:EE:01", "stations": 4, "path": str(p)}
     events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_wake": None}))
     assert called["adopt"] == 1 and called["prov"] == 0          # ADOPT, not provision
     assert any(e["id"] == "await_wake" for e in events)          # "wake", not...
@@ -1643,13 +1643,13 @@ def test_onboard_flow_account_without_mac_provisions_fresh(tmp_path, monkeypatch
 
     async def rec_catch(key, *, want_mac=None, **kw):
         called["adopt"] += 1
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID", "AA:BB:CC:DD:EE:01", st
 
     async def rec_prov(key, *, want_mac=None, **kw):
         called["prov"] += 1
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-PROV", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-PROV", "AA:BB:CC:DD:EE:01", st
 
     monkeypatch.setattr(O, "catch_device", rec_catch)
     monkeypatch.setattr(O, "provision_device", rec_prov)
@@ -1670,7 +1670,7 @@ def test_onboard_flow_adopt_failure_reports_and_saves_nothing(tmp_path, monkeypa
 
     monkeypatch.setattr(O, "catch_device", boom)
     gate = O.OnboardGate()
-    params = {"mode": "account", "key": "ee" * 16, "device_mac": "44:67:55:D8:71:B0",
+    params = {"mode": "account", "key": "ee" * 16, "device_mac": "AA:BB:CC:DD:EE:01",
               "stations": 4, "path": str(p)}
     events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_wake": None}))
     assert events[-1]["id"] == "adopt" and events[-1]["state"] == "failed"
@@ -1706,7 +1706,7 @@ def test_onboard_flow_auth_fail_then_self_key(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "provision_device", _fake_provision)
     gate = O.OnboardGate()
     params = {"mode": "orbit", "email": "me@x.com", "password": "wrong",
-              "device_mac": "44:67:55:D8:71:B0", "path": str(p),
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(p),
               "secrets_path": str(tmp_path / "s.md")}
     events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate,
                                         {"fallback_choice": "self_key", "await_reset": None}))
@@ -1751,7 +1751,7 @@ def test_onboard_flow_app_first_then_retry_succeeds(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "provision_device", _fake_provision)
     gate = O.OnboardGate()
     params = {"mode": "orbit", "email": "me@x.com", "password": "pw",
-              "device_mac": "44:67:55:D8:71:B0", "path": str(p)}
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(p)}
     events = asyncio.run(_drive_onboard(
         O.onboard_flow(params, gate), gate,
         {"fallback_choice": "orbit_app_first", "app_instructions": None, "await_reset": None}))
@@ -1772,7 +1772,7 @@ def test_onboard_flow_marks_get_key_failed_on_auth_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "provision_device", _fake_provision)
     gate = O.OnboardGate()
     params = {"mode": "orbit", "email": "me@x.com", "password": "wrong",
-              "device_mac": "44:67:55:D8:71:B0", "path": str(tmp_path / "c.json"),
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(tmp_path / "c.json"),
               "secrets_path": str(tmp_path / "s.md")}
     events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate,
                                         {"fallback_choice": "self_key", "await_reset": None}))
@@ -1793,7 +1793,7 @@ def test_onboard_flow_gated_steps_emit_resolved(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "provision_device", _fake_provision)
     gate = O.OnboardGate()
     params = {"mode": "orbit", "email": "me@x.com", "password": "pw",
-              "device_mac": "44:67:55:D8:71:B0", "path": str(tmp_path / "c.json")}
+              "device_mac": "AA:BB:CC:DD:EE:01", "path": str(tmp_path / "c.json")}
     events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_reset": None}))
     ar = [e for e in events if e["id"] == "await_reset"]
     assert ar and ar[-1]["state"] == "done"          # resolved, not left waiting_user
@@ -1804,7 +1804,7 @@ def test_onboard_flow_reuse_mode_no_cloud(tmp_path, monkeypatch):
     import json
     import onboarding as O
     p = tmp_path / "config.json"
-    p.write_text(json.dumps({"devices": [{"name": "Old", "mac": "44:67:55:D8:7A:B9",
+    p.write_text(json.dumps({"devices": [{"name": "Old", "mac": "AA:BB:CC:DD:EE:FF",
                                           "network_key": TEST_KEY, "address": "OLD", "stations": 4}]}))
 
     async def no_cloud(*a, **k):
@@ -1813,7 +1813,7 @@ def test_onboard_flow_reuse_mode_no_cloud(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "cloud_fetch", no_cloud)
     monkeypatch.setattr(O, "provision_device", _fake_provision)
     gate = O.OnboardGate()
-    params = {"mode": "reuse", "device_mac": "44:67:55:D8:71:B0", "path": str(p)}
+    params = {"mode": "reuse", "device_mac": "AA:BB:CC:DD:EE:01", "path": str(p)}
     events = asyncio.run(_drive_onboard(O.onboard_flow(params, gate), gate, {"await_reset": None}))
     assert events[-1]["id"] == "save"
     new = json.loads(p.read_text())["devices"][-1]
@@ -1837,13 +1837,13 @@ def test_provision_device_refuses_multiple_fresh_devices():
     """SAFETY (P0): with >1 fresh B-Hyve present, provision_device must refuse and write
     the key to NEITHER — never spray the account key onto an unknown device."""
     import onboarding as O
-    a = FakeTimer(mac="44:67:55:D8:7A:B9", key_hex=None)
-    b = FakeTimer(mac="44:67:55:D8:71:B0", key_hex=None)
+    a = FakeTimer(mac="AA:BB:CC:DD:EE:FF", key_hex=None)
+    b = FakeTimer(mac="AA:BB:CC:DD:EE:01", key_hex=None)
     adverts = [_adv("UUID-A", "", -50), _adv("UUID-B", "", -55)]
     resolver = lambda addr: {"UUID-A": a, "UUID-B": b}.get(addr)
     with fake_catch_ble(adverts, resolver):
         with pytest.raises(O.ResolveError):
-            asyncio.run(O.provision_device(TEST_KEY, want_mac="44:67:55:D8:71:B0", scan_timeout=2.0))
+            asyncio.run(O.provision_device(TEST_KEY, want_mac="AA:BB:CC:DD:EE:01", scan_timeout=2.0))
     assert a._provision_write is None            # key was NOT written to either device
     assert b._provision_write is None
 
@@ -1851,10 +1851,10 @@ def test_provision_device_refuses_multiple_fresh_devices():
 def test_provision_device_reports_wanted_mac_mismatch():
     """If the single caught device's MAC != want_mac, report it (don't hunt/write others)."""
     import onboarding as O
-    only = FakeTimer(mac="44:67:55:D8:7A:B9", key_hex=None)
+    only = FakeTimer(mac="AA:BB:CC:DD:EE:FF", key_hex=None)
     with fake_catch_ble([_adv("UUID-ONLY", "", -50)], lambda _a: only):
         with pytest.raises(O.ResolveError):
-            asyncio.run(O.provision_device(TEST_KEY, want_mac="44:67:55:D8:71:B0",
+            asyncio.run(O.provision_device(TEST_KEY, want_mac="AA:BB:CC:DD:EE:01",
                                            scan_timeout=0.4, reconnect_attempts=1))
 
 
@@ -1887,8 +1887,8 @@ def test_cli_provision_self_key_generates_stashes_and_labels(tmp_path, monkeypat
 
     async def fake_provision(key, *, want_mac=None, **kw):
         captured["key"] = key
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-NEW", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
     def no_cloud(*a, **k):
         raise AssertionError("cloud_fetch must NOT be called in self-key mode")
@@ -1917,8 +1917,8 @@ def test_cli_provision_byo_key(tmp_path, monkeypatch):
 
     async def fake_provision(key, *, want_mac=None, **kw):
         captured["key"] = key
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-NEW", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
     monkeypatch.setattr(O, "provision_device", fake_provision)
     asyncio.run(cli.cmd_register(path=str(p), ask_prompt=False, provision=True,
@@ -1940,8 +1940,8 @@ def test_cli_register_provision_uses_provision_device(tmp_path, monkeypatch):
 
     async def fake_provision(key, *, want_mac=None, **kw):
         called["key"] = key
-        st = parse_reply(FakeTimer(mac="44:67:55:D8:71:B0")._status_plaintext())
-        return "UUID-NEW", "44:67:55:D8:71:B0", st
+        st = parse_reply(FakeTimer(mac="AA:BB:CC:DD:EE:01")._status_plaintext())
+        return "UUID-NEW", "AA:BB:CC:DD:EE:01", st
 
     async def must_not_catch(*a, **k):
         raise AssertionError("provision path must not call catch_device")
@@ -1977,9 +1977,9 @@ def test_write_config_appends_distinct_device(tmp_path):
     import onboarding as O
     p = tmp_path / "config.json"
     O.write_config(str(p), {"name": "A", "address": "UUID-A", "network_key": TEST_KEY,
-                            "mac": "44:67:55:D8:7A:B9", "stations": 4})
+                            "mac": "AA:BB:CC:DD:EE:FF", "stations": 4})
     O.write_config(str(p), {"name": "B", "address": "UUID-B", "network_key": TEST_KEY,
-                            "mac": "44:67:55:D8:71:B0", "stations": 6})
+                            "mac": "AA:BB:CC:DD:EE:01", "stations": 6})
     data = json.loads(p.read_text())
     assert [d["name"] for d in data["devices"]] == ["A", "B"]
 
@@ -2095,13 +2095,13 @@ def test_schedule_per_device_isolation_and_preserves_config(tmp_path):
     import json
     import onboarding as O
     import schedule as S
-    p = _cfg_with_timer(tmp_path, mac="44:67:55:D8:78:00", name="Zone")
+    p = _cfg_with_timer(tmp_path, mac="AA:BB:CC:DD:EE:02", name="Zone")
     O.write_config(p, {"name": "Tap", "address": "UUID-Tap", "network_key": TEST_KEY,
-                       "mac": "44:67:55:D8:71:B0", "stations": 4})
+                       "mac": "AA:BB:CC:DD:EE:01", "stations": 4})
     O.write_account(p, "me@x.com", TEST_KEY)
-    S.write_schedules(p, "44:67:55:D8:71:B0", [{"valve": 1, "start": "07:30", "days": [6], "minutes": 10}])
-    assert S.read_schedules(p, "44:67:55:D8:78:00") == []       # other timer untouched
-    assert len(S.read_schedules(p, "44:67:55:D8:71:B0")) == 1
+    S.write_schedules(p, "AA:BB:CC:DD:EE:01", [{"valve": 1, "start": "07:30", "days": [6], "minutes": 10}])
+    assert S.read_schedules(p, "AA:BB:CC:DD:EE:02") == []       # other timer untouched
+    assert len(S.read_schedules(p, "AA:BB:CC:DD:EE:01")) == 1
     cfg = json.loads(open(p).read())
     assert cfg["account"]["email"] == "me@x.com"                # account preserved
     assert {d["name"] for d in cfg["devices"]} == {"Zone", "Tap"}
@@ -2131,7 +2131,7 @@ def test_schedule_write_unknown_mac_raises(tmp_path):
     import schedule as S
     p = _cfg_with_timer(tmp_path)
     with _pt.raises(S.ScheduleError):
-        S.write_schedules(p, "AA:BB:CC:DD:EE:FF", [{"valve": 1, "start": "06:00", "days": [0], "minutes": 5}])
+        S.write_schedules(p, "12:34:56:78:9A:BC", [{"valve": 1, "start": "06:00", "days": [0], "minutes": 5}])
 
 
 # --- P2: schedule REST (GET/PUT per timer; validate; key never in a response) ---
@@ -2684,7 +2684,7 @@ def test_cloud_fetch_joins_devices_and_keys(monkeypatch):
     routes = {
         "/session": (200, {"orbit_api_key": "tok", "user_id": "u1"}),
         "/devices": (200, [
-            {"name": "Front", "type": "sprinkler_timer", "mac_address": "446755d87ab9",
+            {"name": "Front", "type": "sprinkler_timer", "mac_address": "aabbccddeeff",
              "num_stations": 4, "hardware_version": "HT34A", "firmware_version": "0107",
              "mesh_id": "m1"},
             {"name": "Hub", "type": "bridge", "mesh_id": "m1"},

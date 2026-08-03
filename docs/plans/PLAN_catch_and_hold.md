@@ -1,6 +1,6 @@
 # Plan — Local control of a rotating-address timer (catch-once-and-hold)
 
-**Problem (from `/s3-define`):** the new timer (`44:67:55:D8:71:B0`) advertises with a
+**Problem (from `/s3-define`):** the new timer (`AA:BB:CC:DD:EE:01`) advertises with a
 **rotating/private BLE address** the unbonded Mac can't pre-target, and only
 **re-advertises for a few seconds after the bonded iPhone releases it**. The proven
 onboarding flow (`ONBOARDING_PLAN.md`, E6) assumed a *stable* macOS UUID — that
@@ -48,7 +48,7 @@ Core insight: *a held connection **is** the stable handle we need.*
 ### Phase 0 — Prove control *at all* (manual, user-run, logged)  ⛳ gate
 Run `bhyve_lab.py`: one capture, then `g → zone 1 → 10s` from the `live>` menu.
 - **Proves:** the account key is valid for THIS device, the protocol works, and the
-  catch flow connects + arms + confirms MAC `44:67:55:D8:71:B0` — the foundation all
+  catch flow connects + arms + confirms MAC `AA:BB:CC:DD:EE:01` — the foundation all
   else stands on.
 - **Test/validation:** timer physically waters; `bhyve_lab.log` shows `fe32`, `CONFIRMED`,
   and `watering=True`. Claude reads the log.
@@ -126,7 +126,7 @@ Promote the lab's catch logic into `bhyve_xd.py`, without touching the stable-ad
 ## First concrete action
 **Phase 0, user-run:** in a Terminal —
 ```
-cd /Users/evans/project/bhyve-xd-ble
+cd path/to/bhyve-xd-ble
 ./venv/bin/python bhyve_lab.py      # menu → 2 (capture) → follow prompts → g, zone 1, 10s
 ```
 Then tell Claude; Claude reads `bhyve_lab.log` and we proceed from real data.

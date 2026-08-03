@@ -66,7 +66,7 @@ key is provisioned by the official app — Phase A assumes devices are **already
 
 ### Phase A2 — Live confirmation from empty config  ⛳ gate  ✅ PASSED (2026-08-01)
 Ran from an empty `/tmp/firstrun.json`: cloud login (real creds, no MFA) → fetched key
-→ caught the timer (MAC 44:67:55:D8:71:B0) → wrote config → status read back. Confirmed
+→ caught the timer (MAC AA:BB:CC:DD:EE:01) → wrote config → status read back. Confirmed
 the fetched key was written, not reused. (Original problem statement below.)
 
 - With a **throwaway empty config** and phone Bluetooth OFF, run

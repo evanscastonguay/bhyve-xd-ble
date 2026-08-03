@@ -69,7 +69,7 @@ key, finds the timer, and writes `config.json`:
 **Already have a `config.json`** (address + network key)? Skip registration — `cli.py status` or the
 server just work. See [The network key](#the-network-key) for what goes in it.
 
-- **Linux (BlueZ):** `address` in `config.json` is the **MAC** (`44:67:55:D8:7A:B9`).
+- **Linux (BlueZ):** `address` in `config.json` is the **MAC** (`AA:BB:CC:DD:EE:FF`).
 - **macOS (CoreBluetooth):** `address` is an opaque per-Mac **UUID**; `cli.py scan` / `register`
   finds it for you. Behavior is identical to Linux — the arming sequence is platform-neutral.
 
@@ -101,7 +101,7 @@ With several timers in `config.json`, target one with `--device <name|index>` (d
 ```python
 # library use
 from bhyve_xd import BHyveXD
-dev = BHyveXD("44:67:55:D8:7A:B9", "<network_key_hex>", tz_offset_sec=-14400)
+dev = BHyveXD("AA:BB:CC:DD:EE:FF", "<network_key_hex>", tz_offset_sec=-14400)
 async with dev.session() as s:
     await s.arm()                    # REQUIRED first — see "Why arming matters"
     await s.start_zone(1, 300)
@@ -398,8 +398,9 @@ real network keys, credentials, or captured personal data** (only synthetic test
 
 "Orbit" and "B-Hyve" are trademarks of their respective owner, used here **nominatively** only to
 describe compatibility. Published for **personal, non-commercial interoperability** with hardware you
-own, with no warranty. You are responsible for complying with the laws and any agreements that apply
-to you; nothing here is legal advice.
+own, with no warranty. **Use at your own risk:** this software actuates **physical water valves** —
+you are solely responsible for your own hardware, water use, and any resulting property/plant damage,
+and for complying with the laws and any agreements that apply to you. Nothing here is legal advice.
 
 **Good faith:** if you represent Orbit and have any concerns, please **open an issue** — I'll respond
 promptly and address them in good faith.

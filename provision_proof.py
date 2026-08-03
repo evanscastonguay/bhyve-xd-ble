@@ -16,10 +16,10 @@ PASS only if: keyless before -> provisioned by us -> survives >= N power-cycles,
 That chain can only be explained by our provisioning (kills the circularity + the confound).
 
 RUN (in your own Terminal; you perform the physical reset/power-cycles at the prompts):
-    cd /Users/evans/project/bhyve-xd-ble
+    cd path/to/bhyve-xd-ble
     ./venv/bin/python provision_proof.py                 # uses config.json device 0's key
-    ./venv/bin/python provision_proof.py --device-mac=44:67:55:D8:71:B0
-    ./venv/bin/python provision_proof.py --self-key --device-mac=44:67:55:D8:71:B0
+    ./venv/bin/python provision_proof.py --device-mac=AA:BB:CC:DD:EE:01
+    ./venv/bin/python provision_proof.py --self-key --device-mac=AA:BB:CC:DD:EE:01
         # ^ proves the STANDALONE path: generate our OWN key (no Orbit account), then the
         #   same negative-control + power-cycle durability test. Key is stashed to secrets/.
 

@@ -10,7 +10,7 @@ mechanics would reuse this same switch logic if ever wanted).
   config path is **env-overridable**. `secrets/` and `config.json` are **gitignored** and live only
   on the box (authoritative, must never be clobbered).
 - `app = FastAPI(version="1.2.0")` — hardcoded; no real build-version endpoint yet.
-- Box: `bhyve.service` (system unit, `User=evans`, enabled, reboot-survival proven in P4).
+- Box: `bhyve.service` (system unit, `User=pi`, enabled, reboot-survival proven in P4).
   **`sudo` needs a password** (not passwordless); SSH is key-based. GitHub reachable but the box has
   **no repo auth**. `~/bhyve-local` is stale July scratch — leave untouched.
 - Test gate: `pytest test_e2e.py` (131 green today).
@@ -79,7 +79,7 @@ source release is pruned).
 password prompt — verified by a full unattended deploy.
 
 - `/etc/sudoers.d/bhyve-deploy`:
-  `evans ALL=(root) NOPASSWD: /usr/bin/systemctl restart bhyve.service, /usr/bin/systemctl start bhyve.service, /usr/bin/systemctl stop bhyve.service, /usr/bin/systemctl status bhyve.service`
+  `pi ALL=(root) NOPASSWD: /usr/bin/systemctl restart bhyve.service, /usr/bin/systemctl start bhyve.service, /usr/bin/systemctl stop bhyve.service, /usr/bin/systemctl status bhyve.service`
   Install with `sudo visudo -cf` validation to avoid lockout. **Proves:** `deploy.sh` restarts
   **unattended** (no password prompt).
 
