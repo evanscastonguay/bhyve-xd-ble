@@ -43,8 +43,10 @@ async def _lifespan(app):
         mqtt_stop = asyncio.Event()
         devs = [{"index": i, "name": d.get("name"), "stations": int(d.get("stations", 4))}
                 for i, d in enumerate(_config_devices())]
+        init = [(i, {"automatic": _host_scheduling_enabled()}) for i in range(len(devs))]
         mqtt_task = asyncio.create_task(
-            mqtt_bridge.run_bridge(mcfg, devs, app.version, mqtt_stop, on_command=_mqtt_command))
+            mqtt_bridge.run_bridge(mcfg, devs, app.version, mqtt_stop,
+                                   on_command=_mqtt_command, initial_states=init))
     try:
         yield
     finally:
@@ -131,9 +133,34 @@ def _device_index(device=None) -> int:
     return 0
 
 
-async def _mqtt_command(idx: int, zone: int, on: bool):
-    """HA switch toggle -> start/stop through the shared BLE lock. Confirmed state re-publishes via
-    _run's cache hook. A failed command is swallowed, so HA just keeps showing the last real state."""
+def _cached_status(idx: int) -> dict:
+    """Last cached status dict for a device index, or {} — never forces a BLE read."""
+    try:
+        addr = _device(str(idx)).address
+    except Exception:  # noqa: BLE001
+        return {}
+    e = _status_cache.get(addr)
+    return dict(e["data"]) if e else {}
+
+
+async def _mqtt_command(kind: str, idx: int, zone, on: bool):
+    """HA command -> control. `automatic` toggles host scheduling; `valve` starts/stops a zone.
+    Confirmed state re-publishes (via _run's hook, or explicitly for automatic) so HA reflects
+    reality. Failures are swallowed, so HA just keeps showing the last real state."""
+    if kind == "automatic":
+        try:
+            config = onboarding._load_config(CONFIG)
+            config["host_scheduling"] = bool(on)
+            onboarding._atomic_write_config(CONFIG, config)
+        except Exception:  # noqa: BLE001
+            pass
+        br = mqtt_bridge.active()
+        if br is not None:
+            try:
+                await br.publish_state(idx, {**_cached_status(idx), "automatic": bool(on)})
+            except Exception:  # noqa: BLE001
+                pass
+        return
     cfg = _mqtt_config() or {}
     try:
         mins = float(cfg.get("default_minutes", 5))
@@ -165,7 +192,8 @@ async def _run(coro_fn, device=None):
         br = mqtt_bridge.active()       # mirror confirmed state to Home Assistant, if the bridge is up
         if br is not None:
             try:
-                await br.publish_state(_device_index(device), data)
+                await br.publish_state(_device_index(device),
+                                       {**data, "automatic": _host_scheduling_enabled()})
             except Exception:          # noqa: BLE001 — MQTT must never break control
                 pass
     return result

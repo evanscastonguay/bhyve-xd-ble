@@ -84,23 +84,58 @@ def discovery_configs(idx: int, name: str, stations: int, version: str,
         "icon": "mdi:timer-sand",
         "device": dev, "availability": avail,
     }))
+
+    uid = f"{base}_{idx}_active_zone"
+    out.append((f"{prefix}/sensor/{uid}/config", {
+        "name": "Active zone",
+        "unique_id": uid,
+        "state_topic": t["state"],
+        "value_template": "{{ value_json.active_zone | default('') }}",
+        "icon": "mdi:water",
+        "device": dev, "availability": avail,
+    }))
     return out
 
 
+def automatic_config(idx: int, name: str, version: str,
+                     base: str = DEFAULT_BASE, prefix: str = DEFAULT_PREFIX):
+    """The single 'Automatic schedule' switch (host scheduling on/off). It's global, so the bridge
+    emits it once, attached to the first device. Returns (config_topic, payload)."""
+    t = topics(base, idx)
+    dev = _device_block(idx, name, version)
+    avail = [{"topic": t["availability"], "payload_available": "online",
+              "payload_not_available": "offline"}]
+    uid = f"{base}_{idx}_automatic"
+    return (f"{prefix}/switch/{uid}/config", {
+        "name": "Automatic schedule",
+        "unique_id": uid,
+        "state_topic": t["state"],
+        "value_template": "{{ 'ON' if value_json.automatic else 'OFF' }}",
+        "command_topic": f"{base}/{idx}/automatic/set",
+        "payload_on": "ON", "payload_off": "OFF",
+        "icon": "mdi:calendar-clock",
+        "device": dev, "availability": avail,
+    })
+
+
 def state_payload(status: dict) -> dict:
-    """The subset of a DeviceStatus.to_dict() the HA entities template off of."""
-    return {
+    """The subset of a DeviceStatus.to_dict() the HA entities template off of. `automatic` (the
+    global schedule switch) is included only when the server supplies it."""
+    p = {
         "is_watering": bool(status.get("is_watering")),
         "active_zone": status.get("active_zone"),
         "seconds_remaining": status.get("seconds_remaining"),
     }
+    if "automatic" in status:
+        p["automatic"] = bool(status["automatic"])
+    return p
 
 
 # --- commands FROM Home Assistant (parsing is pure + tested; I/O lives in run_bridge) ---------- #
 
-def command_sub(base: str) -> str:
-    """The single wildcard subscription that catches every valve command topic."""
-    return f"{base}/+/valve/+/set"
+def command_subs(base: str) -> list:
+    """The wildcard subscriptions that catch every command topic (valve + automatic)."""
+    return [f"{base}/+/valve/+/set", f"{base}/+/automatic/set"]
 
 
 def parse_command_topic(base: str, topic: str):
@@ -114,15 +149,29 @@ def parse_command_topic(base: str, topic: str):
     return None
 
 
+def parse_command(base: str, topic: str):
+    """Any command topic -> ('valve', idx, zone) | ('automatic', idx, None) | None."""
+    v = parse_command_topic(base, topic)
+    if v is not None:
+        return ("valve", v[0], v[1])
+    p = topic.split("/")
+    if len(p) == 4 and p[0] == base and p[2] == "automatic" and p[3] == "set":
+        try:
+            return ("automatic", int(p[1]), None)
+        except ValueError:
+            return None
+    return None
+
+
 async def dispatch_command(base: str, topic: str, payload, on_command) -> bool:
-    """Parse a command message and invoke `on_command(idx, zone, on)`. Returns False (no-op) for
-    anything that isn't a valve command. Payload `ON` -> start, anything else -> stop."""
-    parsed = parse_command_topic(base, topic)
+    """Parse a command and invoke `on_command(kind, idx, zone, on)`. Returns False (no-op) for
+    anything that isn't a command. Payload `ON` -> start / enable, anything else -> stop / disable."""
+    parsed = parse_command(base, topic)
     if parsed is None:
         return False
-    idx, zone = parsed
+    kind, idx, zone = parsed
     on = str(payload).strip().upper() == "ON"
-    await on_command(idx, zone, on)
+    await on_command(kind, idx, zone, on)
     return True
 
 
@@ -138,10 +187,14 @@ class MqttBridge:
         self.prefix = prefix
 
     async def publish_discovery(self, devices, version: str):
-        for d in devices:
+        for n, d in enumerate(devices):
+            idx = d["index"]
+            name = d.get("name") or f"Timer {idx}"
             for ctopic, payload in discovery_configs(
-                    d["index"], d.get("name") or f"Timer {d['index']}",
-                    int(d.get("stations", 4)), version, self.base, self.prefix):
+                    idx, name, int(d.get("stations", 4)), version, self.base, self.prefix):
+                await self.client.publish(ctopic, json.dumps(payload), retain=True)
+            if n == 0:      # one global Automatic-schedule switch, attached to the first device
+                ctopic, payload = automatic_config(idx, name, version, self.base, self.prefix)
                 await self.client.publish(ctopic, json.dumps(payload), retain=True)
 
     async def publish_state(self, idx: int, status: dict):
@@ -163,7 +216,8 @@ def active() -> MqttBridge | None:
     return _active
 
 
-async def run_bridge(config: dict, devices, version: str, stop: asyncio.Event, on_command=None):
+async def run_bridge(config: dict, devices, version: str, stop: asyncio.Event,
+                     on_command=None, initial_states=None):
     """Connect to the broker (with an offline LWT), publish Discovery + online, subscribe to valve
     commands (if `on_command` given), then stay connected until `stop` is set. Kept alive for the
     server's lifetime; live state is pushed by server._run via active().publish_state(). Best-effort:
@@ -187,9 +241,15 @@ async def run_bridge(config: dict, devices, version: str, stop: asyncio.Event, o
             await br.publish_availability(True)
             _active = br
             print(f"[mqtt] bridge online -> {config['host']} (base '{base}')")
+            for idx, data in (initial_states or []):    # seed entities (esp. the Automatic switch)
+                try:
+                    await br.publish_state(idx, data)
+                except Exception:  # noqa: BLE001
+                    pass
             pump = None
             if on_command is not None:
-                await client.subscribe(command_sub(base))
+                for sub in command_subs(base):
+                    await client.subscribe(sub)
 
                 async def _pump():
                     async for m in client.messages:
