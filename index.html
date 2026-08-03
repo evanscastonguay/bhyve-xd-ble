@@ -271,17 +271,20 @@ function render(st){
 let bgTimer=null, bgToken=0;
 function cancelBg(){ if(bgTimer){clearTimeout(bgTimer);bgTimer=null;} bgToken++; }  // also voids an in-flight bg render
 function scheduleBg(){ cancelBg(); const dev=curDevice, tok=bgToken; bgTimer=setTimeout(()=>bgStatus(dev,tok),1200); }
-async function bgStatus(dev,tok){
+async function bgStatus(dev,tok,retried){
   bgTimer=null;
   if(busy || dev!==curDevice || tok!==bgToken) return;      // a user action / timer-switch took over
-  $("#state").textContent="reading…"; $("#state").className="pill idle";
-  try{ const st=await api("GET","/api/status");
-       if(!busy && dev===curDevice && tok===bgToken) render(st); }
+  if(!retried){ $("#state").textContent="reading…"; $("#state").className="pill idle"; }
+  try{ const st=await api("GET","/api/status");             // server serves this from cache -> instant
+       if(busy || dev!==curDevice || tok!==bgToken) return;
+       render(st);
+       // if the cache was stale the server kicked a background refresh — re-poll once to show it
+       if(st.stale && !retried){ bgTimer=setTimeout(()=>bgStatus(dev,tok,true),2500); } }
   catch(_){ if(!busy && dev===curDevice && tok===bgToken){ $("#state").textContent="tap ↻ for status"; } }
 }
 async function refresh(){
   if(busy)return; cancelBg(); setBusy(true,"reading status…"); banner(null);
-  try{ render(await api("GET","/api/status")); }
+  try{ render(await api("GET","/api/status?fresh=1")); }    // ↻ = explicit live read, bypass cache
   catch(e){ banner("Couldn't read status: "+e.message+WAKE,"err"); }
   setBusy(false);
 }
