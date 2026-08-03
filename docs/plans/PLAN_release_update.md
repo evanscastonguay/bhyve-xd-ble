@@ -57,7 +57,14 @@ symlink + restart; they **never** rewrite the unit or touch `shared/`.
 - **Gate:** service `active` on the new layout, `/api/status` + `/api/version` OK on the LAN, and it
   **survives a reboot** (repeat the P4 check). **Proves:** the release layout runs prod.
 
-### P2 — `deploy/deploy.sh` core: land + atomic switch + restart (no rollback yet)
+### P2 — `deploy/deploy.sh` core: land + atomic switch + restart (no rollback yet) ✅ DONE 2026-08-02
+**Result:** `deploy.sh` ran green end to end — test gate (133) → rsync `releases/<ts>_<sha>/` →
+fresh venv → VERSION stamp → atomic `current` flip → unattended restart → confirmed
+`/api/version` = new SHA `dc56c0a`. Config preserved (`shared/config.json` keylen=32, untouched);
+old release `4c73ff6` retained as a rollback target. Chose a **fresh venv per release** over the
+`cp -a` reuse optimization (a copied venv hardcodes absolute interpreter paths — fragile once the
+source release is pruned).
+
 - Mac script: (1) `pytest test_e2e.py` gate → abort on red; (2) `id=<ts>_<short-sha>`;
   (3) `rsync` tree → `releases/$id` (exclude `venv .git config.json secrets __pycache__`); (4) on
   box: link shared, build venv — **reuse prev release's venv via `cp -a` when `requirements.txt`
@@ -66,7 +73,11 @@ symlink + restart; they **never** rewrite the unit or touch `shared/`.
 - **Gate:** deploy a trivial change (bump a string) → `/api/version.git_sha` changes; assert
   `shared/config.json` key still `keylen==32` (config untouched). **Proves:** end-to-end push works.
 
-### P2a — Scoped `sudoers` drop-in (one-time; user installs via `visudo`)
+### P2a — Scoped `sudoers` drop-in (one-time; user installs via `visudo`) ✅ DONE 2026-08-02
+**Result:** `deploy/sudoers.bhyve-deploy` installed to `/etc/sudoers.d/bhyve-deploy` (via
+`visudo -cf` validation). `deploy.sh`'s `sudo systemctl restart bhyve.service` now runs with no
+password prompt — verified by a full unattended deploy.
+
 - `/etc/sudoers.d/bhyve-deploy`:
   `evans ALL=(root) NOPASSWD: /usr/bin/systemctl restart bhyve.service, /usr/bin/systemctl start bhyve.service, /usr/bin/systemctl stop bhyve.service, /usr/bin/systemctl status bhyve.service`
   Install with `sudo visudo -cf` validation to avoid lockout. **Proves:** `deploy.sh` restarts

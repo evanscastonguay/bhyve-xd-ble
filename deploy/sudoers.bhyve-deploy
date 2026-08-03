@@ -1,0 +1,10 @@
+# bhyve deploy — let the deploy user restart ONLY the bhyve service without a password.
+# This is what makes deploy.sh's restart step unattended (no interactive sudo prompt).
+#
+# Install safely (validates syntax first, so a typo cannot lock you out of sudo):
+#   scp deploy/sudoers.bhyve-deploy bhyve-linux:~/
+#   ssh -t bhyve-linux 'sudo visudo -cf ~/sudoers.bhyve-deploy \
+#     && sudo install -o root -g root -m 0440 ~/sudoers.bhyve-deploy /etc/sudoers.d/bhyve-deploy'
+#
+# Scope is deliberately narrow: only these four systemctl verbs on bhyve.service.
+evans ALL=(root) NOPASSWD: /usr/bin/systemctl restart bhyve.service, /usr/bin/systemctl start bhyve.service, /usr/bin/systemctl stop bhyve.service, /usr/bin/systemctl status bhyve.service
