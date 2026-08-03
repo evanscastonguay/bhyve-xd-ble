@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions & ideas (Discussions)
+    url: https://github.com/evanscastonguay/bhyve-xd-ble/discussions
+    about: Ask questions, share setups, or discuss features here.
+  - name: Note for Orbit
+    url: https://github.com/evanscastonguay/bhyve-xd-ble#license--provenance
+    about: Unofficial, not affiliated with Orbit — see the good-faith note. Open an issue with concerns.

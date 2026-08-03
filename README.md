@@ -1,5 +1,9 @@
 # bhyve-xd-ble
 
+[![CI](https://github.com/evanscastonguay/bhyve-xd-ble/actions/workflows/ci.yml/badge.svg)](https://github.com/evanscastonguay/bhyve-xd-ble/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Stars](https://img.shields.io/github/stars/evanscastonguay/bhyve-xd-ble?style=social)
+
 Local Bluetooth control of the **Orbit B-Hyve XD** 4-port hose timer — no cloud, no Wi-Fi hub, no
 Orbit app required. It runs as a **small always-on local server next to the timer** — a browser UI,
 a REST API, and a CLI — that sets the clock, starts/stops any zone, runs a watering schedule, and
@@ -14,6 +18,26 @@ the device reports `watering, 300s remaining` after a start and `idle` after a s
 >
 > A good-faith **interoperability** tool for controlling a B-Hyve timer **you own**, locally — not a
 > means to bypass Orbit's services or cloud.
+
+## Why this? (vs. the Wi-Fi hub / cloud)
+
+You already own the timer — this runs it **locally over Bluetooth**, so there's no cloud dependency
+and no extra hub to buy.
+
+| | **bhyve-xd-ble** | Orbit app + Wi-Fi hub | `sebr/bhyve-home-assistant` |
+|---|:--:|:--:|:--:|
+| Control locally, no internet | ✅ | ❌ | ❌ |
+| No paid Wi-Fi hub required | ✅ | ❌ | ❌ |
+| Direct Bluetooth to the timer | ✅ | ❌ | ❌ *(not supported)* |
+| Home Assistant | ✅ *(MQTT)* | ✅ *(cloud)* | ✅ *(cloud)* |
+| Your data stays on your network | ✅ | ❌ | ❌ |
+| Price | **free** | hub hardware + app | free *(but needs the hub)* |
+
+## Demo
+
+<!-- TODO: drop a short GIF here — e.g. the web UI toggling a valve, or `cli.py start 1 300`.
+     Save as docs/demo.gif and replace this comment with:  ![demo](docs/demo.gif)  -->
+_Coming soon — a 10-second clip of starting/stopping a zone locally._
 
 ## What works
 
