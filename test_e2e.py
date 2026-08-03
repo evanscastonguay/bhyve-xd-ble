@@ -606,6 +606,34 @@ def test_mqtt_parse_command_topic():
     assert mb.parse_command_topic("bhyve", "bhyve/x/valve/2/set") is None    # non-numeric idx
 
 
+def test_update_is_newer():
+    import update_check as uc
+    assert uc.is_newer("1.4.0", "1.3.0") is True
+    assert uc.is_newer("1.3.0", "1.3.0") is False
+    assert uc.is_newer("1.2.9", "1.3.0") is False
+    assert uc.is_newer("v1.4.0", "1.3.0") is True       # tolerate a leading 'v'
+    assert uc.is_newer("garbage", "1.3.0") is False     # unparseable -> not newer
+    assert uc.is_newer(None, "1.3.0") is False
+
+
+def test_update_check_with_injected_fetch():
+    import update_check as uc
+    async def newer(): return "1.5.0"
+    assert asyncio.run(uc.check("1.3.0", fetch=newer)) == {"latest": "1.5.0", "update_available": True}
+    async def none(): return None                       # offline / no release -> graceful
+    assert asyncio.run(uc.check("1.3.0", fetch=none)) == {"latest": None, "update_available": False}
+    async def boom(): raise RuntimeError("network down")
+    assert asyncio.run(uc.check("1.3.0", fetch=boom)) == {"latest": None, "update_available": False}
+
+
+def test_api_version_merges_update_info(monkeypatch):
+    """/api/version surfaces update info only after an opt-in check has populated it."""
+    import server
+    monkeypatch.setattr(server, "_update_info", {"latest": "1.5.0", "update_available": True})
+    got = asyncio.run(server.version())
+    assert got["git_sha"] and got["latest"] == "1.5.0" and got["update_available"] is True
+
+
 def test_container_build_config_maps_options():
     """The container entrypoint turns flat add-on/env options into the server's config.json shape."""
     import container_entrypoint as ce
