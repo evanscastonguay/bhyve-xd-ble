@@ -66,7 +66,7 @@ async def _lifespan(app):
                 mqtt_task.cancel()
 
 
-app = FastAPI(title="B-Hyve XD Local API", version="1.3.0", lifespan=_lifespan)
+app = FastAPI(title="B-Hyve XD Local API", version="1.0.0", lifespan=_lifespan)
 _ble_lock = asyncio.Lock()   # the radio does one thing at a time
 # Last-known status per device address, so GET /api/status answers instantly instead of paying a
 # fresh BLE connect every time. Every BLE op (_run) refreshes it; a stale read triggers a
