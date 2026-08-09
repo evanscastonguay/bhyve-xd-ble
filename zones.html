@@ -5,48 +5,57 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Zones · B-Hyve</title>
 <style>
-  :root { color-scheme: light dark; --gap: 12px; }
+  :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 17px/1.4 -apple-system, system-ui, sans-serif; padding: 16px;
-         max-width: 640px; margin: 0 auto; }
+  body { margin: 0 auto; max-width: 640px; padding: 16px;
+         font: 17px/1.4 -apple-system, system-ui, sans-serif; }
   h1 { font-size: 20px; margin: 4px 0 2px; }
-  a { color: inherit; opacity: .7; font-size: 14px; }
-  #status { min-height: 22px; margin: 6px 0 14px; font-weight: 600; }
+  .top { display: flex; align-items: baseline; gap: 12px; }
+  a, .muted { color: inherit; opacity: .65; font-size: 14px; }
+  button.link { background: none; border: 0; color: inherit; opacity: .65; font-size: 14px;
+                cursor: pointer; padding: 0; text-decoration: underline; }
+  #status { min-height: 22px; margin: 8px 0 2px; font-weight: 600; }
+  #fresh { font-size: 13px; opacity: .55; margin-bottom: 14px; }
   .dur { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; opacity: .85; }
   .dur input { width: 70px; padding: 8px; font-size: 16px; }
-  .grp { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; opacity: .6;
-         margin: 14px 0 6px; }
-  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
+  .grp { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; margin: 14px 0 6px; }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   button.zone { padding: 22px 0; font-size: 22px; font-weight: 700; border-radius: 14px;
-                border: 2px solid #8883; background: #8881; cursor: pointer; }
+                border: 2px solid #8883; background: #8881; cursor: pointer; position: relative; }
   button.zone.on { background: #14a44d; border-color: #14a44d; color: #fff; }
-  button.zone.pending { background: #e8a33d; border-color: #e8a33d; color: #fff;
-                        animation: pulse 1s ease-in-out infinite; }
-  @keyframes pulse { 50% { opacity: .55; } }
+  button.zone.starting { background: #e8a33d; border-color: #e8a33d; color: #fff;
+                         animation: pulse 1s ease-in-out infinite; }
+  button.zone.failed { background: #dc4c6422; border-color: #dc4c64; color: #dc4c64; }
+  button.zone .tag { position: absolute; top: 4px; right: 7px; font-size: 12px; font-weight: 600; }
+  @keyframes pulse { 50% { opacity: .5; } }
   #stop { width: 100%; margin-top: 22px; padding: 20px; font-size: 20px; font-weight: 700;
           border-radius: 14px; border: 0; background: #dc4c64; color: #fff; cursor: pointer; }
   #stop:active, button.zone:active { transform: translateY(1px); }
 </style>
 </head>
 <body>
-  <h1>Zones</h1>
-  <a href="/">full controls &rsaquo;</a>
+  <div class="top"><h1>Zones</h1><a href="/">full controls &rsaquo;</a>
+    <button class="link" onclick="refresh()">↻ refresh</button></div>
   <div id="status">…</div>
+  <div id="fresh"></div>
   <div class="dur"><label>Run for</label><input id="mins" type="number" min="1" max="120" value="60"><span>min</span></div>
   <div id="grid"></div>
   <button id="stop" onclick="stopAll()">■ STOP ALL</button>
 
 <script>
 const $ = s => document.querySelector(s);
-let zones = [], pending = null;   // pending = the zone `n` we optimistically turned on
+let zones = [], starting = null, failed = {}, lastLoad = 0, busyStop = false;
 
-async function api(method, path, body) {
-  const opt = { method, headers: { "Content-Type": "application/json" } };
-  if (body) opt.body = JSON.stringify(body);
-  const r = await fetch(path, opt);
-  let d; try { d = await r.json(); } catch { d = {}; }
-  if (!r.ok) throw new Error(d.detail || ("HTTP " + r.status));
-  return d;
+async function api(method, path, body, timeoutMs = 15000) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const opt = { method, headers: { "Content-Type": "application/json" }, signal: ctl.signal };
+    if (body) opt.body = JSON.stringify(body);
+    const r = await fetch(path, opt);
+    let d; try { d = await r.json(); } catch { d = {}; }
+    if (!r.ok) throw new Error(d.detail || ("HTTP " + r.status));
+    return d;
+  } finally { clearTimeout(t); }
 }
 
 function render() {
@@ -59,43 +68,66 @@ function render() {
       box = document.createElement("div"); box.className = "row"; g.appendChild(box);
     }
     const b = document.createElement("button");
-    b.className = "zone" + (z.active ? " on" : "") + (pending === z.n ? " pending" : "");
-    b.textContent = z.n;
-    b.title = z.name + " · valve " + z.zone;
+    const state = starting === z.n ? "starting" : failed[z.n] ? "failed" : z.active ? "on" : "";
+    b.className = "zone" + (state ? " " + state : "");
+    b.innerHTML = z.n + (state === "failed" ? '<span class="tag">✗</span>'
+                        : state === "on" ? '<span class="tag">on</span>' : "");
+    b.title = z.name + " · valve " + z.zone + (failed[z.n] ? " — " + failed[z.n] : "");
     b.onclick = () => startZone(z);
     box.appendChild(b);
   }
-  const a = zones.find(z => z.active);
-  $("#status").textContent = pending !== null ? ("starting zone " + pending + "…")
+  const a = zones.find(z => z.active), fz = Object.keys(failed);
+  $("#status").textContent =
+      starting !== null ? ("starting zone " + starting + "… (up to ~30s)")
+    : fz.length ? ("zone " + fz[0] + " didn't start — " + failed[fz[0]] + " (tap it to retry)")
     : a ? ("ON: zone " + a.n + " — " + a.name + (a.seconds_remaining ? " · " + a.seconds_remaining + "s left" : ""))
         : "all off";
 }
 
-async function load() {
-  if (pending !== null) return;          // don't let the poll clobber an optimistic in-flight click
-  try { const r = await api("GET", "/api/zones"); zones = r.zones; render(); } catch (e) {}
+function tickFresh() {
+  if (!lastLoad) return;
+  $("#fresh").textContent = "updated " + Math.round((Date.now() - lastLoad) / 1000) + "s ago";
 }
 
+async function load(reconcile) {
+  if (starting !== null || busyStop) return;   // never clobber an in-flight action; never stalls (both clear in finally)
+  try {
+    const r = await api("GET", "/api/zones" + (reconcile ? "?reconcile=1" : ""), null, reconcile ? 40000 : 8000);
+    zones = r.zones; lastLoad = Date.now();
+    for (const z of zones) if (z.active && failed[z.n]) delete failed[z.n];   // recovered
+    render(); tickFresh();
+  } catch (e) { /* transient; next poll retries */ }
+}
+function refresh() { load(true); }
+
 async function startZone(z) {
-  pending = z.n;                          // optimistic: light this one, clear the rest, now
-  for (const x of zones) x.active = (x.n === z.n);
+  if (starting !== null) return;
+  starting = z.n; delete failed[z.n];
+  for (const x of zones) x.active = (x.n === z.n);   // optimistic while we confirm
   render();
   const mins = parseFloat($("#mins").value) || 60;
-  try { await api("POST", "/api/zones/start", { device: z.device, zone: z.zone, minutes: mins }); }
-  catch (e) { $("#status").textContent = "✗ " + e.message; }
-  pending = null; await load();           // reconcile with the confirmed truth
+  try {
+    const r = await api("POST", "/api/zones/start", { device: z.device, zone: z.zone, minutes: mins }, 45000);
+    if (r.ok) failed = {}; else failed[z.n] = r.reason || "not confirmed";
+  } catch (e) {
+    failed[z.n] = (e.name === "AbortError") ? "timed out — tap to retry" : "no response — tap to retry";
+  }
+  starting = null;
+  await load(true);              // reconcile against real state after the action
 }
 
 async function stopAll() {
-  pending = null;
+  busyStop = true; starting = null; failed = {};
   for (const x of zones) x.active = false; render();
-  try { await api("POST", "/api/zones/stop-all"); }
-  catch (e) { $("#status").textContent = "✗ " + e.message; }
-  await load();
+  try { await api("POST", "/api/zones/stop-all", null, 45000); }
+  catch (e) { $("#status").textContent = "✗ stop: " + e.message; }
+  busyStop = false;
+  await load(true);
 }
 
-load();
-setInterval(load, 5000);
+load(true);                      // reconcile true state on open
+setInterval(() => load(false), 5000);
+setInterval(tickFresh, 1000);
 </script>
 </body>
 </html>
