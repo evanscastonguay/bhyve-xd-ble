@@ -634,6 +634,50 @@ def test_api_version_merges_update_info(monkeypatch):
     assert got["git_sha"] and got["latest"] == "1.5.0" and got["update_available"] is True
 
 
+def _use_two_fake_timers(monkeypatch):
+    """Two independent fake timers at config indices 0 and 1 (for the exclusive-zone logic)."""
+    import server
+    server._status_cache.clear(); server._status_refreshing.clear(); server._active_zone = None
+    a, b = _CacheDev(), _CacheDev()
+    a.address, b.address = "A", "B"
+    fakes = {0: a, 1: b}
+    monkeypatch.setattr(server, "_device", lambda device=None: fakes[int(device)])
+    monkeypatch.setattr(server, "_config_devices", lambda: [
+        {"name": "zone1-4 timer", "stations": 4}, {"name": "zone5-8 timer", "stations": 4}])
+    return server, a, b
+
+
+def test_zones_start_is_globally_exclusive(monkeypatch):
+    """Starting a zone stops whatever was running on the OTHER timer first (one zone globally)."""
+    server, a, b = _use_two_fake_timers(monkeypatch)
+    asyncio.run(server.zones_start(server.ZoneStartBody(device=0, zone=1)))
+    assert a._watering is True and server._active_zone == (0, 1)
+    asyncio.run(server.zones_start(server.ZoneStartBody(device=1, zone=2)))
+    assert a._watering is False                       # the other timer was stopped
+    assert b._watering is True and server._active_zone == (1, 2)
+
+
+def test_zones_stop_all(monkeypatch):
+    """stop-all turns off BOTH timers and clears the active zone."""
+    server, a, b = _use_two_fake_timers(monkeypatch)
+    asyncio.run(server.zones_start(server.ZoneStartBody(device=0, zone=1)))
+    b._watering = True                                # pretend both are somehow on
+    r = asyncio.run(server.zones_stop_all())
+    assert a._watering is False and b._watering is False and server._active_zone is None
+    assert all(x["ok"] for x in r["results"]) and len(r["results"]) == 2
+
+
+def test_zones_view_is_eight_with_one_active(monkeypatch):
+    """GET /api/zones returns 8 zones (n=1..8) with exactly one active, mapped to the right timer."""
+    server, a, b = _use_two_fake_timers(monkeypatch)
+    asyncio.run(server.zones_start(server.ZoneStartBody(device=1, zone=1)))   # global zone 5
+    v = asyncio.run(server.zones())
+    assert [z["n"] for z in v["zones"]] == list(range(1, 9))
+    active = [z for z in v["zones"] if z["active"]]
+    assert len(active) == 1 and active[0]["n"] == 5 and active[0]["device"] == 1 and active[0]["zone"] == 1
+    assert v["active"] == {"device": 1, "zone": 1}
+
+
 def test_container_build_config_maps_options():
     """The container entrypoint turns flat add-on/env options into the server's config.json shape."""
     import container_entrypoint as ce
