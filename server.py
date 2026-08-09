@@ -34,6 +34,7 @@ from bhyve_xd import BHyveXD
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.environ.get("BHYVE_CONFIG", os.path.join(HERE, "config.json"))
 INDEX = os.path.join(HERE, "index.html")
+ZONES = os.path.join(HERE, "zones.html")
 
 @asynccontextmanager
 async def _lifespan(app):
@@ -425,6 +426,12 @@ async def remove_device(index: int):
 async def index():
     # no-store: this control UI must never be served stale from browser cache
     return FileResponse(INDEX, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/zones")
+async def zones_page():
+    """The fast single-page 8-zone dashboard (one click per zone). See zones.html + /api/zones."""
+    return FileResponse(ZONES, headers={"Cache-Control": "no-store"})
 
 
 def _read_version():
