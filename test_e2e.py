@@ -634,6 +634,13 @@ def test_api_version_merges_update_info(monkeypatch):
     assert got["git_sha"] and got["latest"] == "1.5.0" and got["update_available"] is True
 
 
+def test_zones_page_served():
+    """GET /zones serves the dashboard page."""
+    import server
+    r = asyncio.run(server.zones_page())
+    assert str(getattr(r, "path", "")).endswith("zones.html")
+
+
 def _use_two_fake_timers(monkeypatch):
     """Two independent fake timers at config indices 0 and 1 (for the exclusive-zone logic)."""
     import server

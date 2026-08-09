@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Zones · B-Hyve</title>
+<style>
+  :root { color-scheme: light dark; --gap: 12px; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 17px/1.4 -apple-system, system-ui, sans-serif; padding: 16px;
+         max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  a { color: inherit; opacity: .7; font-size: 14px; }
+  #status { min-height: 22px; margin: 6px 0 14px; font-weight: 600; }
+  .dur { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; opacity: .85; }
+  .dur input { width: 70px; padding: 8px; font-size: 16px; }
+  .grp { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; opacity: .6;
+         margin: 14px 0 6px; }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
+  button.zone { padding: 22px 0; font-size: 22px; font-weight: 700; border-radius: 14px;
+                border: 2px solid #8883; background: #8881; cursor: pointer; }
+  button.zone.on { background: #14a44d; border-color: #14a44d; color: #fff; }
+  button.zone.pending { background: #e8a33d; border-color: #e8a33d; color: #fff;
+                        animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  #stop { width: 100%; margin-top: 22px; padding: 20px; font-size: 20px; font-weight: 700;
+          border-radius: 14px; border: 0; background: #dc4c64; color: #fff; cursor: pointer; }
+  #stop:active, button.zone:active { transform: translateY(1px); }
+</style>
+</head>
+<body>
+  <h1>Zones</h1>
+  <a href="/">full controls &rsaquo;</a>
+  <div id="status">…</div>
+  <div class="dur"><label>Run for</label><input id="mins" type="number" min="1" max="120" value="60"><span>min</span></div>
+  <div id="grid"></div>
+  <button id="stop" onclick="stopAll()">■ STOP ALL</button>
+
+<script>
+const $ = s => document.querySelector(s);
+let zones = [], pending = null;   // pending = the zone `n` we optimistically turned on
+
+async function api(method, path, body) {
+  const opt = { method, headers: { "Content-Type": "application/json" } };
+  if (body) opt.body = JSON.stringify(body);
+  const r = await fetch(path, opt);
+  let d; try { d = await r.json(); } catch { d = {}; }
+  if (!r.ok) throw new Error(d.detail || ("HTTP " + r.status));
+  return d;
+}
+
+function render() {
+  const g = $("#grid"); g.innerHTML = "";
+  let curDev = null, box = null;
+  for (const z of zones) {
+    if (z.device !== curDev) {
+      curDev = z.device;
+      const h = document.createElement("div"); h.className = "grp"; h.textContent = z.name; g.appendChild(h);
+      box = document.createElement("div"); box.className = "row"; g.appendChild(box);
+    }
+    const b = document.createElement("button");
+    b.className = "zone" + (z.active ? " on" : "") + (pending === z.n ? " pending" : "");
+    b.textContent = z.n;
+    b.title = z.name + " · valve " + z.zone;
+    b.onclick = () => startZone(z);
+    box.appendChild(b);
+  }
+  const a = zones.find(z => z.active);
+  $("#status").textContent = pending !== null ? ("starting zone " + pending + "…")
+    : a ? ("ON: zone " + a.n + " — " + a.name + (a.seconds_remaining ? " · " + a.seconds_remaining + "s left" : ""))
+        : "all off";
+}
+
+async function load() {
+  if (pending !== null) return;          // don't let the poll clobber an optimistic in-flight click
+  try { const r = await api("GET", "/api/zones"); zones = r.zones; render(); } catch (e) {}
+}
+
+async function startZone(z) {
+  pending = z.n;                          // optimistic: light this one, clear the rest, now
+  for (const x of zones) x.active = (x.n === z.n);
+  render();
+  const mins = parseFloat($("#mins").value) || 60;
+  try { await api("POST", "/api/zones/start", { device: z.device, zone: z.zone, minutes: mins }); }
+  catch (e) { $("#status").textContent = "✗ " + e.message; }
+  pending = null; await load();           // reconcile with the confirmed truth
+}
+
+async function stopAll() {
+  pending = null;
+  for (const x of zones) x.active = false; render();
+  try { await api("POST", "/api/zones/stop-all"); }
+  catch (e) { $("#status").textContent = "✗ " + e.message; }
+  await load();
+}
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

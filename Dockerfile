@@ -2,7 +2,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY *.py index.html ./
+COPY *.py index.html zones.html ./
 ENV BHYVE_CONFIG=/data/config.json
 EXPOSE 8000
 VOLUME /data
