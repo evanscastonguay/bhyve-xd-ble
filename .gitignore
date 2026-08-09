@@ -8,3 +8,4 @@ secrets/
 deploy/local.env
 # private strategy notes — never publish
 docs/internal/
+active_zone.json

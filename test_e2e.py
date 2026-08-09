@@ -651,7 +651,82 @@ def _use_two_fake_timers(monkeypatch):
     monkeypatch.setattr(server, "_device", lambda device=None: fakes[int(device)])
     monkeypatch.setattr(server, "_config_devices", lambda: [
         {"name": "zone1-4 timer", "stations": 4}, {"name": "zone5-8 timer", "stations": 4}])
+    monkeypatch.setattr(server, "_persist_active", lambda: None)   # don't touch disk in tests
     return server, a, b
+
+
+class _FlakyDev:
+    """Fake that can miss the first N starts (unconfirmed) or refuse to confirm a stop."""
+    def __init__(self, fail_starts=0, stop_confirms=True):
+        self.address = "F"
+        self.fail_starts = fail_starts
+        self.stop_confirms = stop_confirms
+        self.starts = self.stops = 0
+        self._watering = False
+    async def start(self, zone, secs):
+        self.starts += 1
+        if self.starts <= self.fail_starts:
+            return _CacheStatus(False)            # unconfirmed (empty-status style)
+        self._watering = True
+        return _CacheStatus(True, zone)
+    async def stop(self, zone=None):
+        self.stops += 1
+        if not self.stop_confirms:
+            return _CacheStatus(True)             # claims still watering -> stop not confirmed
+        self._watering = False
+        return _CacheStatus(False)
+    async def status(self):
+        return _CacheStatus(self._watering)
+
+
+def _use_flaky(monkeypatch, d0, d1):
+    import server
+    server._status_cache.clear(); server._active_zone = None
+    d0.address, d1.address = "F0", "F1"
+    fakes = {0: d0, 1: d1}
+    monkeypatch.setattr(server, "_device", lambda device=None: fakes[int(device)])
+    monkeypatch.setattr(server, "_config_devices", lambda: [
+        {"name": "zone1-4 timer", "stations": 4}, {"name": "zone5-8 timer", "stations": 4}])
+    monkeypatch.setattr(server, "_persist_active", lambda: None)
+    return server
+
+
+def test_zones_start_retries_then_confirms(monkeypatch):
+    server = _use_flaky(monkeypatch, _FlakyDev(fail_starts=1), _FlakyDev())
+    r = asyncio.run(server.zones_start(server.ZoneStartBody(device=0, zone=1)))
+    assert r["ok"] is True and server._active_zone == (0, 1)   # succeeded on the retry
+
+
+def test_zones_start_unconfirmed_stays_inactive_and_reports(monkeypatch):
+    server = _use_flaky(monkeypatch, _FlakyDev(fail_starts=99), _FlakyDev())
+    r = asyncio.run(server.zones_start(server.ZoneStartBody(device=0, zone=1)))
+    assert r["ok"] is False and server._active_zone is None and "retry" in (r["reason"] or "")
+
+
+def test_zones_start_refuses_when_old_wont_stop(monkeypatch):
+    """Never open two valves: if the running zone can't be confirmed stopped, refuse the new start."""
+    d0 = _FlakyDev(stop_confirms=False); d1 = _FlakyDev()
+    server = _use_flaky(monkeypatch, d0, d1)
+    server._active_zone = (0, 1)
+    r = asyncio.run(server.zones_start(server.ZoneStartBody(device=1, zone=1)))
+    assert r["ok"] is False and server._active_zone == (0, 1) and d1.starts == 0
+
+
+def test_zones_reconcile_clears_stale_active(monkeypatch):
+    d0 = _FlakyDev(); d1 = _FlakyDev()
+    server = _use_flaky(monkeypatch, d0, d1)
+    server._active_zone = (0, 1); d0._watering = False    # server belief is stale; device is idle
+    v = asyncio.run(server.zones(reconcile=True))
+    assert server._active_zone is None and v["active"] is None
+
+
+def test_active_zone_persist_roundtrip(tmp_path, monkeypatch):
+    import server
+    cfg = tmp_path / "config.json"; cfg.write_text('{"devices":[]}')
+    monkeypatch.setattr(server, "CONFIG", str(cfg))
+    server._active_zone = (1, 3); server._persist_active()
+    server._active_zone = None; server._load_active()
+    assert server._active_zone == (1, 3)
 
 
 def test_zones_start_is_globally_exclusive(monkeypatch):

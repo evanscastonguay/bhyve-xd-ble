@@ -39,6 +39,7 @@ ZONES = os.path.join(HERE, "zones.html")
 @asynccontextmanager
 async def _lifespan(app):
     task = asyncio.create_task(_scheduler_loop())   # host-driven schedule engine
+    _load_active()                                  # restore the last-known active zone across restarts
     if _update_check_enabled():                     # opt-in: ask GitHub for the latest version once
         async def _chk():
             global _update_info
@@ -802,43 +803,104 @@ async def stop_all(device: str | None = None):
 
 
 # --- multi-timer dashboard: at most ONE zone runs globally (water pressure) ------------------- #
+# Truth model: _active_zone is set ONLY on a read-back-confirmed start, is persisted (survives
+# restart), and is reconciled against a real device read. Actions auto-retry to absorb the flaky
+# BLE link, and never leave two valves open.
+
+RETRY_ATTEMPTS = 3
+
+
+def _active_dict():
+    return {"device": _active_zone[0], "zone": _active_zone[1]} if _active_zone else None
+
+
+def _active_state_path():
+    # next to the (symlink-resolved) config, so it lives in shared/ and survives deploys
+    return os.path.join(os.path.dirname(os.path.realpath(CONFIG)), "active_zone.json")
+
+
+def _persist_active():
+    try:
+        with open(_active_state_path(), "w") as f:
+            json.dump(_active_dict(), f)
+    except OSError:
+        pass
+
+
+def _load_active():
+    global _active_zone
+    try:
+        d = json.load(open(_active_state_path()))
+        _active_zone = (d["device"], d["zone"]) if d else None
+    except (OSError, ValueError, KeyError, TypeError):
+        _active_zone = None
+
+
+async def _act_confirmed(make_coro, device, want: bool, attempts: int = RETRY_ATTEMPTS):
+    """Run a BLE op and retry until read-back says is_watering == want (True=started/False=stopped),
+    or attempts are exhausted. Absorbs the flaky link so one miss isn't surfaced as failure."""
+    last = None
+    for i in range(attempts):
+        try:
+            st = await _run(make_coro, device)
+            if getattr(st, "is_watering", None) == want:
+                return True, st
+            last = st
+        except HTTPException as e:
+            last = e
+        if i + 1 < attempts:
+            await asyncio.sleep(0)     # yield; each _run reconnects, which is the real "retry"
+    return False, last
+
 
 @app.post("/api/zones/start")
 async def zones_start(body: ZoneStartBody):
-    """Start one zone, globally exclusive: if a DIFFERENT zone is running (on either timer), stop it
-    and confirm idle FIRST (never two valves open), then start this one. Re-clicking the active zone
-    just restarts it (e.g. new duration)."""
+    """Start one zone, globally exclusive and CONFIRMED. If a different zone is running, stop it and
+    confirm idle first; if that can't be confirmed, REFUSE (never two valves open). Then start with
+    retry; mark active ONLY on confirmed watering."""
     global _active_zone
     if _active_zone is not None and _active_zone != (body.device, body.zone):
-        old_dev, _old_zone = _active_zone
-        await _run(lambda d: d.stop(), str(old_dev))          # confirm-idle before the new start
-        _active_zone = None
-    st = await _run(lambda d: d.start(body.zone, int(body.minutes * 60)), str(body.device))
-    if getattr(st, "is_watering", False):
-        _active_zone = (body.device, body.zone)
-    return {"active": (_active_zone and {"device": _active_zone[0], "zone": _active_zone[1]}),
-            "confirmed_watering": getattr(st, "is_watering", False), **st.to_dict()}
+        ok, _ = await _act_confirmed(lambda d: d.stop(), str(_active_zone[0]), False)
+        if not ok:
+            return {"ok": False, "reason": "couldn't confirm the running zone stopped — try again",
+                    "active": _active_dict(), "confirmed_watering": False}
+        _active_zone = None; _persist_active()
+    ok, st = await _act_confirmed(lambda d: d.start(body.zone, int(body.minutes * 60)),
+                                  str(body.device), True)
+    if ok:
+        _active_zone = (body.device, body.zone); _persist_active()
+    data = st.to_dict() if hasattr(st, "to_dict") else {}
+    return {"ok": ok, "reason": None if ok else "start not confirmed — tap to retry",
+            "active": _active_dict(), "confirmed_watering": ok, **data}
 
 
 @app.post("/api/zones/stop-all")
 async def zones_stop_all():
-    """Turn everything off on BOTH timers (guaranteed all-off) and clear the active zone."""
+    """Turn everything off on BOTH timers (retry to confirmed-idle) and clear the active zone once
+    its device is confirmed off."""
     global _active_zone
     results = []
     for i in range(len(_config_devices())):
-        try:
-            st = await _run(lambda d: d.stop(), str(i))
-            results.append({"device": i, "ok": not st.is_watering})
-        except HTTPException as e:
-            results.append({"device": i, "ok": False, "error": e.detail})
-    _active_zone = None
-    return {"results": results}
+        ok, _ = await _act_confirmed(lambda d: d.stop(), str(i), False)
+        results.append({"device": i, "ok": ok})
+    if _active_zone is None or any(r["device"] == _active_zone[0] and r["ok"] for r in results):
+        _active_zone = None; _persist_active()
+    return {"results": results, "active": _active_dict()}
 
 
 @app.get("/api/zones")
-async def zones():
-    """The 8-zone dashboard view (instant, from cache): every zone across both timers, numbered
-    1..N, with the single global active zone flagged. No BLE."""
+async def zones(reconcile: bool = False):
+    """The 8-zone dashboard view. Instant from cache; with ?reconcile=1 it does one real read of the
+    believed-active device and self-corrects (clears a stale active) — fixes auto-stop / restart /
+    app-use drift."""
+    global _active_zone
+    if reconcile and _active_zone is not None:
+        try:
+            st = await _run(lambda d: d.status(), str(_active_zone[0]))
+            if not getattr(st, "is_watering", False):
+                _active_zone = None; _persist_active()
+        except HTTPException:
+            pass
     out, n = [], 0
     for i, d in enumerate(_config_devices()):
         cached = _cached_status(i)
@@ -848,5 +910,4 @@ async def zones():
             out.append({"n": n, "device": i, "zone": z,
                         "name": d.get("name") or f"Timer {i}", "active": active,
                         "seconds_remaining": cached.get("seconds_remaining") if active else None})
-    return {"zones": out,
-            "active": (_active_zone and {"device": _active_zone[0], "zone": _active_zone[1]})}
+    return {"zones": out, "active": _active_dict()}
