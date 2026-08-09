@@ -75,6 +75,7 @@ STATUS_TTL = 20.0                # seconds; older than this -> serve cached AND 
 _status_cache: dict = {}         # address -> {"data": <status dict>, "ts": monotonic}
 _status_refreshing: set = set()  # addresses with an in-flight background refresh
 _update_info: dict = {}          # {latest, update_available} from the opt-in update check (see update_check.py)
+_active_zone = None              # (device_index, zone) currently running — at most ONE globally (see /api/zones)
 _job = None                  # the single in-flight onboarding job (or None)
 _account_session = None       # in-memory only: {email, key, devices}. NEVER persisted;
                               # the persisted account (email+key) lives in config.json.
@@ -216,6 +217,12 @@ async def _run(coro_fn, device=None):
 
 class StartBody(BaseModel):
     minutes: float = Field(default=5, gt=0, le=120, description="run time in minutes")
+
+
+class ZoneStartBody(BaseModel):
+    device: int = Field(ge=0, description="config device index")
+    zone: int = Field(ge=1, le=4, description="valve on that device (1..4)")
+    minutes: float = Field(default=60, gt=0, le=120, description="run time (default 60)")
 
 
 class OnboardBody(BaseModel):
@@ -785,3 +792,54 @@ async def stop_zone(zone: int, device: str | None = None):
 async def stop_all(device: str | None = None):
     st = await _run(lambda d: d.stop(), device)
     return {"confirmed_idle": not st.is_watering, **st.to_dict()}
+
+
+# --- multi-timer dashboard: at most ONE zone runs globally (water pressure) ------------------- #
+
+@app.post("/api/zones/start")
+async def zones_start(body: ZoneStartBody):
+    """Start one zone, globally exclusive: if a DIFFERENT zone is running (on either timer), stop it
+    and confirm idle FIRST (never two valves open), then start this one. Re-clicking the active zone
+    just restarts it (e.g. new duration)."""
+    global _active_zone
+    if _active_zone is not None and _active_zone != (body.device, body.zone):
+        old_dev, _old_zone = _active_zone
+        await _run(lambda d: d.stop(), str(old_dev))          # confirm-idle before the new start
+        _active_zone = None
+    st = await _run(lambda d: d.start(body.zone, int(body.minutes * 60)), str(body.device))
+    if getattr(st, "is_watering", False):
+        _active_zone = (body.device, body.zone)
+    return {"active": (_active_zone and {"device": _active_zone[0], "zone": _active_zone[1]}),
+            "confirmed_watering": getattr(st, "is_watering", False), **st.to_dict()}
+
+
+@app.post("/api/zones/stop-all")
+async def zones_stop_all():
+    """Turn everything off on BOTH timers (guaranteed all-off) and clear the active zone."""
+    global _active_zone
+    results = []
+    for i in range(len(_config_devices())):
+        try:
+            st = await _run(lambda d: d.stop(), str(i))
+            results.append({"device": i, "ok": not st.is_watering})
+        except HTTPException as e:
+            results.append({"device": i, "ok": False, "error": e.detail})
+    _active_zone = None
+    return {"results": results}
+
+
+@app.get("/api/zones")
+async def zones():
+    """The 8-zone dashboard view (instant, from cache): every zone across both timers, numbered
+    1..N, with the single global active zone flagged. No BLE."""
+    out, n = [], 0
+    for i, d in enumerate(_config_devices()):
+        cached = _cached_status(i)
+        for z in range(1, int(d.get("stations", 4)) + 1):
+            n += 1
+            active = _active_zone == (i, z)
+            out.append({"n": n, "device": i, "zone": z,
+                        "name": d.get("name") or f"Timer {i}", "active": active,
+                        "seconds_remaining": cached.get("seconds_remaining") if active else None})
+    return {"zones": out,
+            "active": (_active_zone and {"device": _active_zone[0], "zone": _active_zone[1]})}
