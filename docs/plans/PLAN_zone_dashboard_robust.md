@@ -60,6 +60,19 @@ Software fixes the UX bugs; a **radio fix** (ESP32 proxy) is needed for the weak
 P1 fake-timer unit tests (retry, confirm-gate, refuse, partial stop, persistence, reconcile).
 P2 JS check + serve + simulated failure state. P3 live matrix.
 
+## Status (2026-08-09)
+- **P1 ✅** confirmed + retry + persist + reconcile (server) — merged, 5 tests.
+- **P2 ✅** honest per-zone state-machine UI — merged.
+- **P3 ✅ live QA on the box:** zones **1–4 (`…78:00`) 4/4** with state aligned through every switch;
+  zone 5 (`…71:B0`, weak) **failed honestly** (`ok:false`, "tap to retry", `active` stayed None — no
+  phantom, never two valves); reconcile + stop-all left a clean all-off. The trust problems (silent
+  failure / state drift / no visibility) are **fixed**.
+- **P4 (radio, user):** zones 5–8 are limited by the weak `…71:B0` link (0/4). **Software can't fix
+  it** — reposition the box/timer, USB extension, or an external antenna dongle
+  (`docs/bluetooth_reliability.md`). *(An ESPHome BT proxy does NOT help a standalone bleak server —
+  earlier suggestion corrected.)*
+- **P5 ✅** docs (README "Zone dashboard" + `docs/bluetooth_reliability.md`).
+
 ## Checkpoints
 After **P1** (server truth green) · after **P2** (UI honest) · after **P3** (live QA pass on 1–4).
 

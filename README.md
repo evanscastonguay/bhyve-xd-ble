@@ -134,6 +134,18 @@ async with dev.session() as s:
     await s.stop()
 ```
 
+## Zone dashboard (fast one-tap control)
+
+For everyday use across one or more timers, open **`/zones`** — a single page with a button per valve
+and a big **STOP ALL**. One tap starts a zone (default 60 min; the device auto-stops); tapping another
+switches to it — **only one zone runs at a time** (sized for single-zone water pressure). Each button
+shows its real state — **starting → on ✓ → failed ✗ (tap to retry)** — set only on the device's own
+read-back and reconciled against it, so the page never silently fails or lies about what's on.
+
+It runs over Wi-Fi (the box does the Bluetooth), so your phone's Bluetooth can stay off — just don't
+open the Orbit app at the same time (it grabs the timer's one BLE connection). Reliability depends on
+signal to each timer — see [`docs/bluetooth_reliability.md`](docs/bluetooth_reliability.md).
+
 ## Scheduling
 
 Author per-valve rules in the web UI (**🗓 Schedule** tab): valve · start time · days · duration.
